@@ -1,0 +1,168 @@
+//! Loads the three naptrap artifact directories and runs end-to-end detection.
+//!
+//! Each directory holds config.json and model.safetensors, exactly as
+//! downloaded from Hugging Face:
+//!   androiddrew/naptrap-phonmatchnet-en       (format naptrap-phonmatchnet-v1)
+//!   androiddrew/google-speech-embedding-pytorch (naptrap-google-speech-embedding-v1)
+//!   androiddrew/g2p-en-decoder-pytorch        (naptrap-g2p-en-decoder-v1)
+
+const std = @import("std");
+const st = @import("safetensors.zig");
+const ops = @import("ops.zig");
+const features = @import("features.zig");
+const google_mod = @import("google.zig");
+const text_mod = @import("text.zig");
+const network_mod = @import("phonmatchnet.zig");
+
+pub const weights_file = "model.safetensors";
+const max_weights_bytes = 256 << 20;
+
+pub const Threshold = struct {
+    far: f64,
+    value: f64,
+};
+
+pub const Keyword = text_mod.G2p.Features;
+
+pub const Prediction = struct {
+    score: f32,
+    logit: f32,
+    threshold: f64,
+    accepted: bool,
+    target_far: f64,
+};
+
+pub const Artifact = struct {
+    config: std.json.Value,
+    weights: st.File,
+    sha256: [64]u8,
+};
+
+/// Read config.json, check its "format", verify the weights' SHA-256 and parse them.
+pub fn readArtifact(io: std.Io, arena: std.mem.Allocator, dir: []const u8, format: []const u8) !Artifact {
+    const cwd = std.Io.Dir.cwd();
+    const config_path = try std.fmt.allocPrint(arena, "{s}/config.json", .{dir});
+    const config_bytes = try cwd.readFileAlloc(io, config_path, arena, .limited(1 << 20));
+    const config = std.json.parseFromSliceLeaky(std.json.Value, arena, config_bytes, .{}) catch
+        return error.InvalidConfig;
+
+    const found = jsonPath(config, &.{"format"}) orelse return error.InvalidConfig;
+    if (found != .string or !std.mem.eql(u8, found.string, format)) {
+        std.log.err("{s} is not a {s} artifact", .{ dir, format });
+        return error.WrongArtifactFormat;
+    }
+
+    const weights_path = try std.fmt.allocPrint(arena, "{s}/" ++ weights_file, .{dir});
+    const bytes = try cwd.readFileAlloc(io, weights_path, arena, .limited(max_weights_bytes));
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+
+    const expected = jsonPath(config, &.{ "sha256", weights_file }) orelse return error.InvalidConfig;
+    if (expected != .string or !std.mem.eql(u8, expected.string, &hex)) {
+        std.log.err("{s} checksum mismatch in {s}", .{ weights_file, dir });
+        return error.ChecksumMismatch;
+    }
+    return .{ .config = config, .weights = try st.File.parse(arena, bytes), .sha256 = hex };
+}
+
+pub fn jsonPath(root: std.json.Value, keys: []const []const u8) ?std.json.Value {
+    var value = root;
+    for (keys) |key| {
+        if (value != .object) return null;
+        value = value.object.get(key) orelse return null;
+    }
+    return value;
+}
+
+fn jsonNumber(value: std.json.Value) ?f64 {
+    return switch (value) {
+        .float => |f| f,
+        .integer => |i| @floatFromInt(i),
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch null,
+        else => null,
+    };
+}
+
+pub const Model = struct {
+    network: network_mod.Network,
+    google: google_mod.Google,
+    g2p: text_mod.G2p,
+    dft: features.Dft,
+    thresholds: []const Threshold,
+
+    /// Everything, including the weights, is allocated from `arena`; keep it
+    /// alive as long as the model.
+    pub fn load(io: std.Io, arena: std.mem.Allocator, model_dir: []const u8, google_dir: []const u8, g2p_dir: []const u8) !Model {
+        const main = try readArtifact(io, arena, model_dir, "naptrap-phonmatchnet-v1");
+        const google = try readArtifact(io, arena, google_dir, "naptrap-google-speech-embedding-v1");
+        const g2p = try readArtifact(io, arena, g2p_dir, "naptrap-g2p-en-decoder-v1");
+
+        // The keyword model pins the exact encoders it was trained with.
+        inline for (.{ .{ "google", &google }, .{ "g2p", &g2p } }) |pair| {
+            if (jsonPath(main.config, &.{ "requires", pair[0], "sha256" })) |pinned| {
+                if (pinned != .string or !std.mem.eql(u8, pinned.string, &pair[1].sha256)) {
+                    std.log.err("the {s} encoder is not the one this model was trained with", .{pair[0]});
+                    return error.EncoderMismatch;
+                }
+            }
+        }
+
+        const table = jsonPath(main.config, &.{"thresholds"}) orelse return error.InvalidConfig;
+        if (table != .object) return error.InvalidConfig;
+        var thresholds: std.ArrayList(Threshold) = .empty;
+        var it = table.object.iterator();
+        while (it.next()) |kv| {
+            const far = std.fmt.parseFloat(f64, kv.key_ptr.*) catch return error.InvalidConfig;
+            const value = jsonNumber(kv.value_ptr.*) orelse return error.InvalidConfig;
+            if (!std.math.isFinite(value)) return error.InvalidConfig;
+            try thresholds.append(arena, .{ .far = far, .value = value });
+        }
+        if (thresholds.items.len == 0) return error.InvalidConfig;
+
+        return .{
+            .network = try network_mod.Network.init(arena, main.weights),
+            .google = try google_mod.Google.init(arena, google.weights),
+            .g2p = try text_mod.G2p.init(g2p.weights),
+            .dft = try features.Dft.init(arena),
+            .thresholds = thresholds.items,
+        };
+    }
+
+    pub fn threshold(self: Model, far: f64) !f64 {
+        for (self.thresholds) |t| {
+            if (@abs(t.far - far) < 1e-12) return t.value;
+        }
+        return error.UnknownOperatingPoint;
+    }
+
+    /// Precompute a keyword's text features; reuse across clips.
+    pub fn keyword(self: Model, arena: std.mem.Allocator, keyword_text: []const u8) !Keyword {
+        return self.g2p.encode(arena, keyword_text);
+    }
+
+    /// Score one mono 16 kHz clip of 0.5-2 s, samples in [-1, 1].
+    /// `scratch` holds per-call buffers; an arena you reset per clip works well.
+    pub fn detect(self: Model, scratch: std.mem.Allocator, wave: []const f32, kw: Keyword, far: f64) !Prediction {
+        const limit = try self.threshold(far);
+        if (wave.len < features.sample_rate / 2 or wave.len > features.sample_rate * 2) return error.ClipLengthOutOfRange;
+        for (wave) |x| {
+            if (!std.math.isFinite(x) or @abs(x) > 1) return error.InvalidSamples;
+        }
+
+        const mel = try self.network.keywordMel(scratch, self.dft, wave);
+        const t = mel.len / features.keyword_mels;
+        const emb = try self.google.embed(scratch, self.dft, wave);
+        const logit = try self.network.forward(scratch, mel, t, emb.data, emb.rows, kw.data, kw.rows);
+        if (!std.math.isFinite(logit)) return error.InvalidLogit;
+
+        const score = ops.sigmoid(logit);
+        return .{
+            .score = score,
+            .logit = logit,
+            .threshold = limit,
+            .accepted = @as(f64, score) >= limit,
+            .target_far = far,
+        };
+    }
+};
