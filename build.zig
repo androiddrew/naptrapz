@@ -110,11 +110,46 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_parity.addArgs(args);
     b.step("parity", "Compare every stage against PyTorch fixtures").dependOn(&run_parity.step);
 
-    // Unit tests (no model files needed).
-    const tests = b.addTest(.{ .root_module = b.createModule(.{
+    // `zig build test` runs the unit tests and a C ABI smoke test. With
+    // -Dtest-models=DIR it also runs end-to-end tests against real models.
+    const test_step = b.step("test", "Run unit, model and C ABI tests");
+    const check_step = b.step("check", "Compile every artifact and test without installing or running");
+    check_step.dependOn(&exe.step);
+    check_step.dependOn(&parity.step);
+    check_step.dependOn(&static.step);
+    const models_dir: ?[]const u8 = if (b.option([]const u8, "test-models", "Directory with phonmatchnet/, google/ and g2p/ for end-to-end tests")) |dir|
+        b.pathResolve(&.{ b.build_root.path orelse ".", dir })
+    else
+        null;
+
+    const unit_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     }) });
-    b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
+    const test_options = b.addOptions();
+    test_options.addOption([]const u8, "models_dir", models_dir orelse "");
+    const model_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/model_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "naptrap", .module = lib }, .{ .name = "test_options", .module = test_options.createModule() } },
+    }) });
+    const abi_smoke = b.addExecutable(.{
+        .name = "abi_smoke",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    abi_smoke.root_module.addCSourceFile(.{ .file = b.path("tests/abi_smoke.c"), .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Werror" } });
+    abi_smoke.root_module.addIncludePath(b.path("include"));
+    abi_smoke.root_module.linkLibrary(static);
+    const run_abi_smoke = b.addRunArtifact(abi_smoke);
+    if (models_dir) |dir| run_abi_smoke.addArg(dir);
+    run_abi_smoke.expectExitCode(0);
+
+    for ([_]*std.Build.Step.Compile{ unit_tests, model_tests, abi_smoke }) |artifact| {
+        check_step.dependOn(&artifact.step);
+    }
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+    test_step.dependOn(&b.addRunArtifact(model_tests).step);
+    test_step.dependOn(&run_abi_smoke.step);
 }
