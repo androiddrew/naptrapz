@@ -17,6 +17,7 @@ const features = @import("features.zig");
 
 pub const embedding_size = 96;
 pub const samples_per_embedding = 1280;
+pub const source_archive_sha256 = "0f626c42009c1eb916401b7b2800229a211e43100115bc591b9afbf1b60da27f";
 const bn_eps = 0.001;
 
 const Layer = struct {

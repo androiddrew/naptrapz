@@ -8,6 +8,8 @@
 const std = @import("std");
 const ops = @import("ops.zig");
 const st = @import("safetensors.zig");
+const unicode_data = @import("unicode_data.zig");
+pub const unicode_version = unicode_data.unicode_version;
 
 /// Index 0 <pad>, 1 <unk>, 2 </s>, then a..z.
 const grapheme_count = 29;
@@ -22,10 +24,10 @@ const max_decode_steps = 20;
 // Python: replace U+2019 with ', NFKD, drop combining marks, lowercase, then
 // take tokens matching [a-z]+(?:'[a-z]+)*|[0-9]+ and reject any digit token.
 //
-// Zig's standard library has no Unicode normalization, so fold() covers
-// ASCII, Latin-1 and Latin Extended-A, which is where NFKD matters for
-// English keywords. Other characters act as word separators. Extend the
-// tables if you need fullwidth letters or ligatures.
+// Generated Unicode data projects this policy onto the ASCII token alphabet.
+// NFKD reordering only moves combining marks, which are removed. Unicode's
+// contextual lowercase rule (final sigma) cannot produce ASCII tokens, so
+// per-codepoint projection has the same result as whole-string normalization.
 // ---------------------------------------------------------------------------
 
 const ascii_lower: [128]u8 = blk: {
@@ -34,40 +36,26 @@ const ascii_lower: [128]u8 = blk: {
     break :blk table;
 };
 
-/// U+00C0..U+00FF after NFKD and combining-mark removal. " " = not a letter.
-const latin1 = [64][]const u8{
-    "a", "a", "a", "a", "a", "a", " ", "c", "e", "e", "e", "e", "i", "i", "i", "i", // C0
-    " ", "n", "o", "o", "o", "o", "o", " ", " ", "u", "u", "u", "u", "y", " ", " ", // D0
-    "a", "a", "a", "a", "a", "a", " ", "c", "e", "e", "e", "e", "i", "i", "i", "i", // E0
-    " ", "n", "o", "o", "o", "o", "o", " ", " ", "u", "u", "u", "u", "y", " ", "y", // F0
-};
-
-/// U+0100..U+017F (Latin Extended-A) after NFKD and combining-mark removal.
-const latin_ext_a = [128][]const u8{
-    "a",  "a", "a", "a", "a",  "a",  "c",  "c",  "c", "c", "c", "c", "c", "c", "d", "d", // 100
-    " ",  " ", "e", "e", "e",  "e",  "e",  "e",  "e", "e", "e", "e", "g", "g", "g", "g", // 110
-    "g",  "g", "g", "g", "h",  "h",  " ",  " ",  "i", "i", "i", "i", "i", "i", "i", "i", // 120
-    "i",  " ", "ij", "ij", "j", "j", "k", "k", " ", "l", "l", "l", "l", "l", "l", "l ", // 130
-    "l ", " ", " ", "n", "n",  "n",  "n",  "n",  "n", " n", " ", " ", "o", "o", "o", "o", // 140
-    "o",  "o", " ", " ", "r",  "r",  "r",  "r",  "r", "r", "s", "s", "s", "s", "s", "s", // 150
-    "s",  "s", "t", "t", "t",  "t",  " ",  " ",  "u", "u", "u", "u", "u", "u", "u", "u", // 160
-    "u",  "u", "u", "u", "w",  "w",  "y",  "y",  "y", "z", "z", "z", "z", "z", "z", "s", // 170
-};
-
 fn fold(cp: u21) []const u8 {
-    return switch (cp) {
-        0...0x7f => ascii_lower[cp..][0..1],
-        0xaa => "a", // ª
-        0xba => "o", // º
-        0xb2 => "2",
-        0xb3 => "3",
-        0xb9 => "1",
-        0xc0...0xff => latin1[cp - 0xc0],
-        0x100...0x17f => latin_ext_a[cp - 0x100],
-        0x300...0x36f => "", // combining marks
-        0x2019 => "'",
-        else => " ",
-    };
+    if (cp < 128) return ascii_lower[cp..][0..1];
+    var low: usize = 0;
+    var high: usize = unicode_data.rules.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const rule = unicode_data.rules[mid];
+        if (cp < rule.first) {
+            high = mid;
+        } else if (cp > rule.last) {
+            low = mid + 1;
+        } else {
+            if (rule.increment) {
+                const index = rule.value[0] + cp - rule.first;
+                return ascii_lower[index..][0..1];
+            }
+            return rule.value;
+        }
+    }
+    return " ";
 }
 
 fn isLetter(c: u8) bool {

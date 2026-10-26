@@ -188,25 +188,39 @@ pub fn conv2d(alloc: std.mem.Allocator, x: Map, w: []const f32, c_out: usize, kh
     if (x.h + 2 * ph < kh or x.w + 2 * pw < kw) return error.InputTooShort;
     const oh = x.h + 2 * ph - kh + 1;
     const ow = x.w + 2 * pw - kw + 1;
-    const out = try alloc.alloc(f32, c_out * oh * ow);
-    for (0..c_out) |o| {
-        for (0..oh) |y| {
-            for (0..ow) |xx| {
-                var acc: f32 = 0;
-                for (0..x.c) |c| {
-                    for (0..kh) |dy| {
-                        const iy = y + dy;
-                        if (iy < ph or iy - ph >= x.h) continue;
-                        for (0..kw) |dx| {
-                            const ix = xx + dx;
-                            if (ix < pw or ix - pw >= x.w) continue;
-                            acc += w[((o * x.c + c) * kh + dy) * kw + dx] *
-                                x.data[(c * x.h + iy - ph) * x.w + ix - pw];
-                        }
+    const plane = oh * ow;
+    const inner = x.c * kh * kw;
+    const out = try alloc.alloc(f32, c_out * plane);
+    errdefer alloc.free(out);
+    // Pack only eight spatial positions at a time, then reuse their patches
+    // across every output channel. This removes padding branches from the
+    // multiply-accumulate loop without allocating a full im2col matrix.
+    // Each SIMD lane follows the original c/kh/kw accumulation order.
+    const V = @Vector(8, f32);
+    const patches = try alloc.alloc(V, inner);
+    defer alloc.free(patches);
+    var at: usize = 0;
+    while (at < plane) : (at += 8) {
+        const lanes = @min(8, plane - at);
+        for (0..x.c) |c| {
+            for (0..kh) |dy| {
+                for (0..kw) |dx| {
+                    var values = [_]f32{0} ** 8;
+                    for (0..lanes) |lane| {
+                        const iy = (at + lane) / ow + dy;
+                        const ix = (at + lane) % ow + dx;
+                        if (iy >= ph and iy - ph < x.h and ix >= pw and ix - pw < x.w)
+                            values[lane] = x.data[(c * x.h + iy - ph) * x.w + ix - pw];
                     }
+                    patches[(c * kh + dy) * kw + dx] = values;
                 }
-                out[(o * oh + y) * ow + xx] = acc;
             }
+        }
+        for (0..c_out) |o| {
+            var acc: V = @splat(0);
+            for (patches, w[o * inner ..][0..inner]) |patch, weight| acc += patch * @as(V, @splat(weight));
+            const values: [8]f32 = acc;
+            @memcpy(out[o * plane + at ..][0..lanes], values[0..lanes]);
         }
     }
     return .{ .data = out, .c = c_out, .h = oh, .w = ow };

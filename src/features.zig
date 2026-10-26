@@ -1,5 +1,5 @@
 //! Audio frontends. Both use a 400-sample window, 160-sample hop and a
-//! 512-point real DFT (257 bins), but differ in framing and scaling:
+//! 512-point FFT (257 real-input bins), but differ in framing and scaling:
 //!
 //!   keywordMel  torch.stft(center=True, pad_mode="reflect"), window centered
 //!               in the 512-point frame, power spectrum, 40 mel bins, log10(x + 1e-7)
@@ -7,11 +7,10 @@
 //!               sample 0, window at the start of the frame, magnitude
 //!               spectrum, 32 mel bins, ln(x + 0.001)
 //!
-//! The DFT is a direct matrix product with precomputed tables. That is
-//! ~50 MFLOP per 2 s clip; swap in a radix-2 FFT later if it matters.
+//! A radix-2 FFT uses f64 butterflies to avoid cancellation noise in nearly
+//! empty spectral bins. Windowed inputs, powers and model features remain f32.
 
 const std = @import("std");
-const ops = @import("ops.zig");
 
 pub const sample_rate = 16000;
 pub const n_fft = 512;
@@ -22,30 +21,51 @@ pub const keyword_mels = 40;
 pub const google_mels = 32;
 pub const google_left_pad = 11120;
 
+// Keep the original public name so callers of Dft.init/power stay compatible.
 pub const Dft = struct {
-    cos: []f32, // [bins][n_fft]
-    sin: []f32, // [bins][n_fft]
+    cos: []f64, // n_fft / 2 twiddle factors
+    sin: []f64,
 
     pub fn init(alloc: std.mem.Allocator) !Dft {
-        const cos = try alloc.alloc(f32, bins * n_fft);
-        const sin = try alloc.alloc(f32, bins * n_fft);
-        for (0..bins) |k| {
-            for (0..n_fft) |n| {
-                // Reduce k*n mod N exactly before converting, for accuracy.
-                const phase = @as(f64, @floatFromInt((k * n) % n_fft)) * (2.0 * std.math.pi / @as(f64, n_fft));
-                cos[k * n_fft + n] = @floatCast(@cos(phase));
-                sin[k * n_fft + n] = @floatCast(@sin(phase));
-            }
+        const cos = try alloc.alloc(f64, n_fft / 2);
+        errdefer alloc.free(cos);
+        const sin = try alloc.alloc(f64, n_fft / 2);
+        for (0..n_fft / 2) |k| {
+            const phase = @as(f64, @floatFromInt(k)) * (2.0 * std.math.pi / @as(f64, n_fft));
+            cos[k] = @cos(phase);
+            sin[k] = -@sin(phase);
         }
+        cos[n_fft / 4] = 0;
         return .{ .cos = cos, .sin = sin };
     }
 
     /// |X[k]|^2 for k in 0..bins.
     pub fn power(self: Dft, frame: *const [n_fft]f32, out: *[bins]f32) void {
+        var real: [n_fft]f64 = undefined;
+        var imag = [_]f64{0} ** n_fft;
+        for (frame, 0..) |sample, i| real[@bitReverse(@as(u9, @intCast(i)))] = sample;
+        var size: usize = 2;
+        while (size <= n_fft) : (size *= 2) {
+            const half = size / 2;
+            const stride = n_fft / size;
+            var start: usize = 0;
+            while (start < n_fft) : (start += size) {
+                for (0..half) |j| {
+                    const even = start + j;
+                    const odd = even + half;
+                    const c = self.cos[j * stride];
+                    const s = self.sin[j * stride];
+                    const re = c * real[odd] - s * imag[odd];
+                    const im = s * real[odd] + c * imag[odd];
+                    real[odd] = real[even] - re;
+                    imag[odd] = imag[even] - im;
+                    real[even] += re;
+                    imag[even] += im;
+                }
+            }
+        }
         for (0..bins) |k| {
-            const re = ops.dot(frame, self.cos[k * n_fft ..][0..n_fft]);
-            const im = ops.dot(frame, self.sin[k * n_fft ..][0..n_fft]);
-            out[k] = re * re + im * im;
+            out[k] = @floatCast(real[k] * real[k] + imag[k] * imag[k]);
         }
     }
 };
@@ -76,11 +96,14 @@ pub fn keywordMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, window:
             x.* = wave[reflect(pos, wave.len)] * window[j - offset];
         }
         dft.power(&frame, &spectrum);
-        for (0..keyword_mels) |m| {
-            var sum: f32 = 0;
-            for (0..bins) |k| sum += spectrum[k] * mel[k * keyword_mels + m];
-            out[t * keyword_mels + m] = @log10(sum + 1e-7);
+        const V = @Vector(keyword_mels, f32);
+        var sums: V = @splat(0);
+        for (spectrum, 0..) |power, k| {
+            const weights: V = mel[k * keyword_mels ..][0..keyword_mels].*;
+            sums += @as(V, @splat(power)) * weights;
         }
+        const energies: [keyword_mels]f32 = sums;
+        for (energies, 0..) |energy, m| out[t * keyword_mels + m] = @log10(energy + 1e-7);
     }
     return out;
 }
@@ -103,11 +126,14 @@ pub fn googleLogMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, windo
             x.* = if (j >= win_length or pos < google_left_pad) 0 else wave[pos - google_left_pad] * window[j];
         }
         dft.power(&frame, &spectrum);
-        for (0..google_mels) |m| {
-            var sum: f32 = 0;
-            for (0..bins) |k| sum += @sqrt(spectrum[k]) * mel[k * google_mels + m];
-            out[f * google_mels + m] = @log(sum + 0.001);
+        const V = @Vector(google_mels, f32);
+        var sums: V = @splat(0);
+        for (spectrum, 0..) |power, k| {
+            const weights: V = mel[k * google_mels ..][0..google_mels].*;
+            sums += @as(V, @splat(@sqrt(power))) * weights;
         }
+        const energies: [google_mels]f32 = sums;
+        for (energies, 0..) |energy, m| out[f * google_mels + m] = @log(energy + 0.001);
     }
     return out;
 }

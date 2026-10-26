@@ -108,6 +108,19 @@ pub const Model = struct {
             }
         }
 
+        const source = jsonPath(google.config, &.{ "source", "archive_sha256" }) orelse return error.InvalidConfig;
+        if (source != .string or !std.mem.eql(u8, source.string, google_mod.source_archive_sha256))
+            return error.UnexpectedGoogleSource;
+
+        const g2p_encoder = try text_mod.G2p.init(g2p.weights);
+        const hidden_size = jsonNumber(jsonPath(g2p.config, &.{"hidden_size"}) orelse return error.InvalidConfig) orelse return error.InvalidConfig;
+        const phonemes = jsonNumber(jsonPath(g2p.config, &.{"phonemes"}) orelse return error.InvalidConfig) orelse return error.InvalidConfig;
+        // The matcher consumes 256-wide decoder states. Config and weights must
+        // describe the same encoder, as in Python's strict state_dict loading.
+        if (g2p_encoder.size != 256 or hidden_size != @as(f64, @floatFromInt(g2p_encoder.size)) or
+            phonemes != @as(f64, @floatFromInt(g2p_encoder.phonemes)) or g2p_encoder.phonemes < 4)
+            return error.G2pConfigMismatch;
+
         const table = jsonPath(main.config, &.{"thresholds"}) orelse return error.InvalidConfig;
         if (table != .object) return error.InvalidConfig;
         var thresholds: std.ArrayList(Threshold) = .empty;
@@ -123,7 +136,7 @@ pub const Model = struct {
         return .{
             .network = try network_mod.Network.init(arena, main.weights),
             .google = try google_mod.Google.init(arena, google.weights),
-            .g2p = try text_mod.G2p.init(g2p.weights),
+            .g2p = g2p_encoder,
             .dft = try features.Dft.init(arena),
             .thresholds = thresholds.items,
         };
@@ -131,7 +144,7 @@ pub const Model = struct {
 
     pub fn threshold(self: Model, far: f64) !f64 {
         for (self.thresholds) |t| {
-            if (@abs(t.far - far) < 1e-12) return t.value;
+            if (t.far == far) return t.value;
         }
         return error.UnknownOperatingPoint;
     }
