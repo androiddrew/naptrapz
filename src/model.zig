@@ -146,7 +146,7 @@ pub const Model = struct {
         // The matcher consumes 256-wide decoder states. Config and weights must
         // describe the same encoder, as in Python's strict state_dict loading.
         if (g2p_encoder.size != 256 or hidden_size != @as(f64, @floatFromInt(g2p_encoder.size)) or
-            phonemes != @as(f64, @floatFromInt(g2p_encoder.phonemes)) or g2p_encoder.phonemes < 4)
+            phonemes != @as(f64, @floatFromInt(g2p_encoder.phonemes)))
             return error.G2pConfigMismatch;
 
         const table = jsonPath(main.config, &.{"thresholds"}) orelse return error.InvalidConfig;

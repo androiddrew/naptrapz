@@ -117,6 +117,8 @@ pub const G2p = struct {
     encoder: ops.Gru,
     decoder: ops.Gru,
 
+    /// Borrow the g2p weights from `file`. Embedding size and phoneme count
+    /// come from the tensor shapes; every other tensor must match them.
     pub fn init(file: st.File) !G2p {
         const enc = try file.get("enc_emb");
         const dec = try file.get("dec_emb");
@@ -124,6 +126,8 @@ pub const G2p = struct {
             return error.ShapeMismatch;
         const size = enc.shape[1];
         const phonemes = dec.shape[0];
+        // Decoding indexes the <s> and </s> phoneme rows (2 and 3).
+        if (size == 0 or phonemes <= phoneme_end) return error.ShapeMismatch;
         return .{
             .size = size,
             .phonemes = phonemes,
