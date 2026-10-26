@@ -1,6 +1,7 @@
 //! Stable C ABI; see include/naptrap.h for ownership and threading contracts.
 const std = @import("std");
 const naptrap = @import("naptrap");
+const bundled = @import("naptrap_bundled");
 const allocator = std.heap.page_allocator;
 
 const Status = enum(c_int) { ok = 0, invalid_argument, invalid_audio, invalid_keyword, unknown_far, model_error, out_of_memory, busy, internal_error };
@@ -86,6 +87,9 @@ const Callback = *const fn (?*anyopaque, *const Event) callconv(.c) void;
 export fn naptrap_abi_version() u32 {
     return 1;
 }
+export fn naptrap_has_embedded_models() u32 {
+    return @intFromBool(bundled.available);
+}
 export fn naptrap_last_error() [*:0]const u8 {
     return &diagnostic;
 }
@@ -99,6 +103,22 @@ fn load(model_dir: [*:0]const u8, google_dir: [*:0]const u8, g2p_dir: [*:0]const
     defer io.deinit();
     engine.model = try naptrap.Model.load(io.io(), engine.arena.allocator(), std.mem.span(model_dir), std.mem.span(google_dir), std.mem.span(g2p_dir));
     return engine;
+}
+
+fn loadEmbedded() !*Engine {
+    const engine = try allocator.create(Engine);
+    errdefer allocator.destroy(engine);
+    engine.* = .{ .arena = std.heap.ArenaAllocator.init(allocator), .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
+    errdefer engine.arena.deinit();
+    engine.model = try bundled.load(engine.arena.allocator());
+    return engine;
+}
+
+export fn naptrap_model_load_embedded(out: ?*?*Engine) c_int {
+    const result = out orelse return fail(error.InvalidArgument, .invalid_argument);
+    result.* = null;
+    result.* = loadEmbedded() catch |err| return fail(err, .model_error);
+    return success();
 }
 
 export fn naptrap_model_load(model_dir: ?[*:0]const u8, google_dir: ?[*:0]const u8, g2p_dir: ?[*:0]const u8, out: ?*?*Engine) c_int {

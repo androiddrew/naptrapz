@@ -27,6 +27,7 @@ decisions match Python, with maximum score difference below `2e-6` in ReleaseFas
 | `src/main.zig` | CLI with the same JSON output and exit codes as `naptrap detect` |
 | `src/stream.zig` | Chunk-independent sliding windows, sample timestamps and debounced wake events |
 | `src/c_api.zig`, `include/naptrap.h` | Versioned native ABI with reference-counted model, keyword and stream handles |
+| `src/unbundled.zig`, build-generated `naptrap_bundled` | Optional model/config embedding, with the same validation as disk loading |
 | `src/parity.zig` | Compares each stage against PyTorch fixtures |
 | `tools/dump_fixtures.py` | Writes those fixtures from the Python model |
 | `tools/generate_unicode.py` | Rebuilds/checks the versioned Unicode source table with Python 3.12 |
@@ -153,6 +154,51 @@ and error codes are in `include/naptrap.h`. Python `ctypes`, Rust FFI and Swift'
 interoperability can use this same interface; Python and native C consumers are
 included in the external validation suite.
 
+## Self-contained embedded-model builds
+
+Supply **`-Dembed-models=DIR`** to embed all three `config.json` and
+`model.safetensors` pairs. The directory must contain `phonmatchnet/`, `google/`
+and `g2p/`. Absolute paths work; relative paths are resolved from the source
+directory containing `build.zig`.
+
+```sh
+zig build -Doptimize=ReleaseFast -Dembed-models=../work/models \
+    --prefix ../work/embedded --cache-dir ../work/zig-cache \
+    --global-cache-dir ../work/zig-global-cache
+
+# No model directory needed at runtime:
+../work/embedded/bin/naptrap detect clip.wav "hey computer"
+arecord -q -t raw -f S16_LE -r 16000 -c 1 | \
+    ../work/embedded/bin/naptrap listen "hey computer"
+../work/embedded/bin/naptrap-parity ../work/fixtures/hey_computer.safetensors --embedded
+```
+
+The tested Linux CLI is statically linked and about 10.8 MB, so distribution can
+consist of that executable alone for a compatible target. Generated embedding
+sources and copied model inputs live in the Zig build cache, never in `src/`.
+Changing weights/configs requires rebuilding. The generated assets are tracked
+build inputs, and the normal build without this option contains no weights.
+
+Bundled CLI builds select their embedded models by default. Explicit `--models`,
+`--model-dir`, `--google-dir` or `--g2p-dir` selects filesystem loading instead;
+there is no silent fallback when an explicit path is wrong. `--embedded` forces
+the bundled path and cannot be combined with model-path options. It reports
+`ModelsNotEmbedded` in an ordinary build. Both `detect` and `listen` support this
+selection; the parity tool supports `--models DIR` or `--embedded` as well.
+
+The shared and static C libraries also include the bundle when built this way.
+Call `naptrap_has_embedded_models()` to inspect availability and
+`naptrap_model_load_embedded(&model)` to load it with no filesystem access.
+`naptrap_model_load(...)` always honors its explicit paths. For Zig consumers,
+the build exports the `naptrap_bundled` module with `available` and
+`load(allocator)`. The core `naptrap` module remains independent of build options;
+`Model.fromBytes(allocator, phonmatchnet_bytes, google_bytes, g2p_bytes)` also
+accepts caller-provided `{config, weights}` byte slices and copies all retained
+model data into the supplied allocator.
+
+Embedded and filesystem loaders share format, SHA-256, encoder-pin, provenance,
+dimension and threshold validation. Embedding does not bypass these checks.
+
 ## Parity workflow
 
 ```sh
@@ -250,12 +296,12 @@ approximately 1.62 ms in projections, attention, GRU and other work. Audio Conv1
 is the next measured compute optimization target; this memory change keeps
 inference around 22 ms and preserves numerical parity.
 
-## Next steps
+## Completed integration milestones
 
 - Streaming listener and reusable detector: implemented (see above).
 - Bounded intermediate feature storage and matcher profiling: implemented (see above).
 - C ABI for model, keyword, detection and streaming handles: implemented (see above).
-- Optionally `@embedFile` the weights into a single static binary.
+- Optional embedded weights/configs in the CLI and native libraries: implemented (see above).
 
 ## License
 

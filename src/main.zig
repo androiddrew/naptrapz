@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const naptrap = @import("naptrap");
+const bundled = @import("naptrap_bundled");
 
 const usage =
     \\usage: naptrap detect <clip.wav> <keyword> [--far 0.01] [--models DIR]
@@ -16,6 +17,8 @@ const usage =
     \\
     \\--models DIR holds phonmatchnet/, google/ and g2p/ (default: models).
     \\listen reads raw mono 16 kHz signed 16-bit little-endian PCM from stdin.
+    \\Bundled builds use embedded models by default. Explicit model paths override them.
+    \\--embedded requires embedded models and cannot be combined with model paths.
     \\
 ;
 
@@ -41,6 +44,8 @@ fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *s
     var count: usize = 0;
     var far: f64 = 0.01;
     var models: []const u8 = "models";
+    var models_explicit = false;
+    var force_embedded = false;
     var model_dir: ?[]const u8 = null;
     var google_dir: ?[]const u8 = null;
     var g2p_dir: ?[]const u8 = null;
@@ -60,6 +65,10 @@ fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *s
             listen_options = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--embedded")) {
+            force_embedded = true;
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--")) {
             if (i + 1 >= args.len) return usageError(out);
             i += 1;
@@ -68,12 +77,16 @@ fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *s
                 far = std.fmt.parseFloat(f64, value) catch return usageError(out);
             } else if (std.mem.eql(u8, arg, "--models")) {
                 models = value;
+                models_explicit = true;
             } else if (std.mem.eql(u8, arg, "--model-dir")) {
                 model_dir = value;
+                models_explicit = true;
             } else if (std.mem.eql(u8, arg, "--google-dir")) {
                 google_dir = value;
+                models_explicit = true;
             } else if (std.mem.eql(u8, arg, "--g2p-dir")) {
                 g2p_dir = value;
+                models_explicit = true;
             } else if (std.mem.eql(u8, arg, "--window-ms")) {
                 config.window_samples = try milliseconds(value);
                 listen_options = true;
@@ -104,7 +117,8 @@ fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *s
         try config.validate();
     } else if (count != 3 or !std.mem.eql(u8, positional[0], "detect") or listen_options) return usageError(out);
 
-    const model = try naptrap.Model.load(
+    if (models_explicit and force_embedded) return error.ConflictingModelOptions;
+    const model = if (force_embedded or (bundled.available and !models_explicit)) try bundled.load(arena) else try naptrap.Model.load(
         io,
         arena,
         model_dir orelse try std.fmt.allocPrint(arena, "{s}/phonmatchnet", .{models}),

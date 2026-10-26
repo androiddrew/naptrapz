@@ -12,6 +12,36 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    var bundle_source = b.path("src/unbundled.zig");
+    if (b.option([]const u8, "embed-models", "Embed phonmatchnet/, google/, g2p/ from this directory (relative to source root or absolute)")) |root| {
+        const files = b.addWriteFiles();
+        inline for (.{ "phonmatchnet", "google", "g2p" }) |part| {
+            inline for (.{ "config.json", "model.safetensors" }) |name| {
+                const path = b.pathResolve(&.{ b.build_root.path orelse ".", root, part, name });
+                _ = files.addCopyFile(.{ .cwd_relative = path }, part ++ "/" ++ name);
+            }
+        }
+        // All generated sources/assets live in the build cache, not src/.
+        bundle_source = files.add("bundled.zig",
+            \\const std = @import("std");
+            \\const naptrap = @import("naptrap");
+            \\pub const available = true;
+            \\pub fn load(arena: std.mem.Allocator) !naptrap.Model {
+            \\    return naptrap.Model.fromBytes(arena,
+            \\        .{ .config = @embedFile("phonmatchnet/config.json"), .weights = @embedFile("phonmatchnet/model.safetensors") },
+            \\        .{ .config = @embedFile("google/config.json"), .weights = @embedFile("google/model.safetensors") },
+            \\        .{ .config = @embedFile("g2p/config.json"), .weights = @embedFile("g2p/model.safetensors") });
+            \\}
+            \\
+        );
+    }
+    const bundled = b.addModule("naptrap_bundled", .{
+        .root_source_file = bundle_source,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "naptrap", .module = lib }},
+    });
+
     // CLI: naptrap detect clip.wav "hey computer"
     const exe = b.addExecutable(.{
         .name = "naptrap",
@@ -19,7 +49,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "naptrap", .module = lib }},
+            .imports = &.{ .{ .name = "naptrap", .module = lib }, .{ .name = "naptrap_bundled", .module = bundled } },
         }),
     });
     b.installArtifact(exe);
@@ -31,7 +61,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .pic = true,
-        .imports = &.{.{ .name = "naptrap", .module = lib }},
+        .imports = &.{ .{ .name = "naptrap", .module = lib }, .{ .name = "naptrap_bundled", .module = bundled } },
     });
     const shared = b.addLibrary(.{ .name = "naptrap", .linkage = .dynamic, .root_module = c_module });
     const static = b.addLibrary(.{ .name = "naptrap", .linkage = .static, .root_module = c_module });
@@ -52,7 +82,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/parity.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "naptrap", .module = lib }},
+            .imports = &.{ .{ .name = "naptrap", .module = lib }, .{ .name = "naptrap_bundled", .module = bundled } },
         }),
     });
     b.installArtifact(parity);

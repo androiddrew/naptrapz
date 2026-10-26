@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const naptrap = @import("naptrap");
+const bundled = @import("naptrap_bundled");
 
 const Check = struct {
     name: []const u8,
@@ -40,16 +41,21 @@ pub fn main(init: std.process.Init) !void {
 
 fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *std.Io.Writer) !u8 {
     if (args.len < 2) {
-        try out.writeAll("usage: naptrap-parity <fixtures.safetensors> [--models DIR] [--strict-frontends]\n");
+        try out.writeAll("usage: naptrap-parity <fixtures.safetensors> [--models DIR | --embedded] [--strict-frontends]\n");
         return 2;
     }
     var models: []const u8 = "models";
+    var models_explicit = false;
+    var force_embedded = false;
     var strict_frontends = false;
     var arg: usize = 2;
     while (arg < args.len) : (arg += 1) {
         if (std.mem.eql(u8, args[arg], "--models") and arg + 1 < args.len) {
             arg += 1;
             models = args[arg];
+            models_explicit = true;
+        } else if (std.mem.eql(u8, args[arg], "--embedded")) {
+            force_embedded = true;
         } else if (std.mem.eql(u8, args[arg], "--strict-frontends")) {
             strict_frontends = true;
         } else return error.InvalidArguments;
@@ -69,7 +75,8 @@ fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *s
         return error.NormalizationMismatch;
     }
 
-    const model = try naptrap.Model.load(
+    if (models_explicit and force_embedded) return error.ConflictingModelOptions;
+    const model = if (force_embedded or (bundled.available and !models_explicit)) try bundled.load(arena) else try naptrap.Model.load(
         io,
         arena,
         try std.fmt.allocPrint(arena, "{s}/phonmatchnet", .{models}),

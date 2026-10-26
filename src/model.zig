@@ -44,32 +44,40 @@ pub const Artifact = struct {
     sha256: [64]u8,
 };
 
+pub const ArtifactBytes = struct { config: []const u8, weights: []const u8 };
+
 /// Read config.json, check its "format", verify the weights' SHA-256 and parse them.
 pub fn readArtifact(io: std.Io, arena: std.mem.Allocator, dir: []const u8, format: []const u8) !Artifact {
     const cwd = std.Io.Dir.cwd();
     const config_path = try std.fmt.allocPrint(arena, "{s}/config.json", .{dir});
     const config_bytes = try cwd.readFileAlloc(io, config_path, arena, .limited(1 << 20));
-    const config = std.json.parseFromSliceLeaky(std.json.Value, arena, config_bytes, .{}) catch
+    const weights_path = try std.fmt.allocPrint(arena, "{s}/" ++ weights_file, .{dir});
+    const bytes = try cwd.readFileAlloc(io, weights_path, arena, .limited(max_weights_bytes));
+    return parseArtifact(arena, .{ .config = config_bytes, .weights = bytes }, dir, format);
+}
+
+/// The same checks apply to disk and embedded artifacts.
+pub fn parseArtifact(arena: std.mem.Allocator, source: ArtifactBytes, label: []const u8, format: []const u8) !Artifact {
+    if (source.config.len > 1 << 20 or source.weights.len > max_weights_bytes) return error.ArtifactTooLarge;
+    const config = std.json.parseFromSliceLeaky(std.json.Value, arena, source.config, .{}) catch
         return error.InvalidConfig;
 
     const found = jsonPath(config, &.{"format"}) orelse return error.InvalidConfig;
     if (found != .string or !std.mem.eql(u8, found.string, format)) {
-        std.log.err("{s} is not a {s} artifact", .{ dir, format });
+        std.log.err("{s} is not a {s} artifact", .{ label, format });
         return error.WrongArtifactFormat;
     }
 
-    const weights_path = try std.fmt.allocPrint(arena, "{s}/" ++ weights_file, .{dir});
-    const bytes = try cwd.readFileAlloc(io, weights_path, arena, .limited(max_weights_bytes));
     var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    std.crypto.hash.sha2.Sha256.hash(source.weights, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
 
     const expected = jsonPath(config, &.{ "sha256", weights_file }) orelse return error.InvalidConfig;
     if (expected != .string or !std.mem.eql(u8, expected.string, &hex)) {
-        std.log.err("{s} checksum mismatch in {s}", .{ weights_file, dir });
+        std.log.err("{s} checksum mismatch in {s}", .{ weights_file, label });
         return error.ChecksumMismatch;
     }
-    return .{ .config = config, .weights = try st.File.parse(arena, bytes), .sha256 = hex };
+    return .{ .config = config, .weights = try st.File.parse(arena, source.weights), .sha256 = hex };
 }
 
 pub fn jsonPath(root: std.json.Value, keys: []const []const u8) ?std.json.Value {
@@ -103,7 +111,19 @@ pub const Model = struct {
         const main = try readArtifact(io, arena, model_dir, "naptrap-phonmatchnet-v1");
         const google = try readArtifact(io, arena, google_dir, "naptrap-google-speech-embedding-v1");
         const g2p = try readArtifact(io, arena, g2p_dir, "naptrap-g2p-en-decoder-v1");
+        return fromArtifacts(arena, main, google, g2p);
+    }
 
+    /// Load without file I/O. All retained model data is copied into arena;
+    /// the input byte buffers may be released after this function returns.
+    pub fn fromBytes(arena: std.mem.Allocator, main_bytes: ArtifactBytes, google_bytes: ArtifactBytes, g2p_bytes: ArtifactBytes) !Model {
+        const main = try parseArtifact(arena, main_bytes, "phonmatchnet", "naptrap-phonmatchnet-v1");
+        const google = try parseArtifact(arena, google_bytes, "google", "naptrap-google-speech-embedding-v1");
+        const g2p = try parseArtifact(arena, g2p_bytes, "g2p", "naptrap-g2p-en-decoder-v1");
+        return fromArtifacts(arena, main, google, g2p);
+    }
+
+    fn fromArtifacts(arena: std.mem.Allocator, main: Artifact, google: Artifact, g2p: Artifact) !Model {
         // The keyword model pins the exact encoders it was trained with.
         inline for (.{ .{ "google", &google }, .{ "g2p", &g2p } }) |pair| {
             if (jsonPath(main.config, &.{ "requires", pair[0], "sha256" })) |pinned| {

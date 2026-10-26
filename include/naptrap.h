@@ -60,6 +60,9 @@ typedef struct naptrap_event {
 typedef void (*naptrap_event_callback)(void *context, const naptrap_event *event);
 
 uint32_t naptrap_abi_version(void);
+uint32_t naptrap_has_embedded_models(void);
+/* No filesystem access. NAPTRAP_MODEL_ERROR when not built with embedded models. */
+naptrap_status naptrap_model_load_embedded(naptrap_model **out);
 /* Thread-local diagnostic, valid until the next status-returning call on this
  * thread. Success clears it. Never free this pointer. */
 const char *naptrap_last_error(void);
