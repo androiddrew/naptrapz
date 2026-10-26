@@ -197,8 +197,7 @@ pub const ConvVector = @Vector(8, f32);
 
 /// Stride-1 Conv2d without bias, zero padding (ph, pw).
 pub fn conv2d(alloc: std.mem.Allocator, x: Map, w: []const f32, c_out: usize, kh: usize, kw: usize, ph: usize, pw: usize) !Map {
-    std.debug.assert(w.len == c_out * x.c * kh * kw);
-    if (x.h + 2 * ph < kh or x.w + 2 * pw < kw) return error.InputTooShort;
+    if (kh == 0 or kw == 0 or x.h + 2 * ph < kh or x.w + 2 * pw < kw) return error.InputTooShort;
     const oh = x.h + 2 * ph - kh + 1;
     const ow = x.w + 2 * pw - kw + 1;
     const plane = oh * ow;
@@ -255,6 +254,7 @@ pub fn conv2dInto(out: []f32, workspace: []ConvVector, x: ConstMap, w: []const f
 
 /// MaxPool2d with kernel == stride, floor mode (PyTorch default).
 pub fn maxPool2d(alloc: std.mem.Allocator, x: Map, kh: usize, kw: usize) !Map {
+    if (kh == 0 or kw == 0) return error.InputTooShort;
     const oh = x.h / kh;
     const ow = x.w / kw;
     const out = try alloc.alloc(f32, x.c * oh * ow);
@@ -333,4 +333,8 @@ test "conv2d and maxPool2d shapes" {
     const p = try maxPool2d(arena, y, 2, 2);
     try testing.expectEqual(@as(usize, 3), p.w);
     try testing.expectEqual(@as(f32, 9), p.data[0]);
+
+    try testing.expectError(error.InputTooShort, maxPool2d(arena, y, 0, 2));
+    try testing.expectError(error.InputTooShort, conv2d(arena, x, &.{}, 1, 0, 3, 0, 1));
+    try testing.expectError(error.ShapeMismatch, conv2d(arena, x, &([_]f32{1} ** 8), 1, 3, 3, 0, 1));
 }
