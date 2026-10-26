@@ -46,7 +46,6 @@ fn fail(err: anyerror, fallback: Status) c_int {
 }
 
 const Engine = struct {
-    arena: std.heap.ArenaAllocator,
     scratch: std.heap.ArenaAllocator,
     model: naptrap.Model,
     references: usize = 1,
@@ -113,20 +112,18 @@ export fn naptrap_last_error() [*:0]const u8 {
 fn load(model_dir: [*:0]const u8, google_dir: [*:0]const u8, g2p_dir: [*:0]const u8) !*Engine {
     const engine = try allocator.create(Engine);
     errdefer allocator.destroy(engine);
-    engine.* = .{ .arena = std.heap.ArenaAllocator.init(allocator), .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
-    errdefer engine.arena.deinit();
+    engine.* = .{ .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
     var io = std.Io.Threaded.init(allocator, .{});
     defer io.deinit();
-    engine.model = try naptrap.Model.load(io.io(), engine.arena.allocator(), std.mem.span(model_dir), std.mem.span(google_dir), std.mem.span(g2p_dir));
+    engine.model = try naptrap.Model.load(io.io(), allocator, std.mem.span(model_dir), std.mem.span(google_dir), std.mem.span(g2p_dir));
     return engine;
 }
 
 fn loadEmbedded() !*Engine {
     const engine = try allocator.create(Engine);
     errdefer allocator.destroy(engine);
-    engine.* = .{ .arena = std.heap.ArenaAllocator.init(allocator), .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
-    errdefer engine.arena.deinit();
-    engine.model = try bundled.load(engine.arena.allocator());
+    engine.* = .{ .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
+    engine.model = try bundled.load(allocator);
     return engine;
 }
 
@@ -150,7 +147,7 @@ fn releaseEngineLocked(engine: *Engine) void {
     engine.references -= 1;
     if (engine.references != 0) return engine.leave();
     engine.scratch.deinit();
-    engine.arena.deinit();
+    engine.model.deinit();
     allocator.destroy(engine);
 }
 fn releaseKeywordLocked(keyword: *Keyword) void {

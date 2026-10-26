@@ -3,6 +3,7 @@
 const std = @import("std");
 const naptrap = @import("naptrap");
 pub const available = false;
+/// Always error.ModelsNotEmbedded in this build.
 pub fn load(_: std.mem.Allocator) !naptrap.Model {
     return error.ModelsNotEmbedded;
 }

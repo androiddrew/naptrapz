@@ -26,8 +26,9 @@ pub fn build(b: *std.Build) void {
             \\const std = @import("std");
             \\const naptrap = @import("naptrap");
             \\pub const available = true;
-            \\pub fn load(arena: std.mem.Allocator) !naptrap.Model {
-            \\    return naptrap.Model.fromBytes(arena,
+            \\/// Load the embedded models; the result owns memory from `gpa`.
+            \\pub fn load(gpa: std.mem.Allocator) !naptrap.Model {
+            \\    return naptrap.Model.fromBytes(gpa,
             \\        .{ .config = @embedFile("phonmatchnet/config.json"), .weights = @embedFile("phonmatchnet/model.safetensors") },
             \\        .{ .config = @embedFile("google/config.json"), .weights = @embedFile("google/model.safetensors") },
             \\        .{ .config = @embedFile("g2p/config.json"), .weights = @embedFile("g2p/model.safetensors") });

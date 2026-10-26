@@ -40,27 +40,31 @@ pub const Prediction = struct {
     target_far: f64,
 };
 
-pub const Artifact = struct {
+/// The two files of one artifact directory, already in memory.
+pub const ArtifactBytes = struct { config: []const u8, weights: []const u8 };
+
+const Artifact = struct {
     config: std.json.Value,
     weights: st.File,
     sha256: [64]u8,
 };
 
-pub const ArtifactBytes = struct { config: []const u8, weights: []const u8 };
+const max_config_bytes = 1 << 20;
 
-/// Read config.json, check its "format", verify the weights' SHA-256 and parse them.
-pub fn readArtifact(io: std.Io, arena: std.mem.Allocator, dir: []const u8, format: []const u8) !Artifact {
-    const cwd = std.Io.Dir.cwd();
-    const config_path = try std.fmt.allocPrint(arena, "{s}/config.json", .{dir});
-    const config_bytes = try cwd.readFileAlloc(io, config_path, arena, .limited(1 << 20));
-    const weights_path = try std.fmt.allocPrint(arena, "{s}/" ++ weights_file, .{dir});
-    const bytes = try cwd.readFileAlloc(io, weights_path, arena, .limited(max_weights_bytes));
-    return parseArtifact(arena, .{ .config = config_bytes, .weights = bytes }, dir, format);
+/// Read config.json and model.safetensors from `dir` into `gpa`.
+fn readArtifact(io: std.Io, gpa: std.mem.Allocator, dir: []const u8) !ArtifactBytes {
+    var root = try std.Io.Dir.cwd().openDir(io, dir, .{});
+    defer root.close(io);
+    const config = try root.readFileAlloc(io, "config.json", gpa, .limited(max_config_bytes));
+    errdefer gpa.free(config);
+    const weights = try root.readFileAlloc(io, weights_file, gpa, .limited(max_weights_bytes));
+    return .{ .config = config, .weights = weights };
 }
 
+/// Check the config's "format", verify the weights' SHA-256 and parse them.
 /// The same checks apply to disk and embedded artifacts.
-pub fn parseArtifact(arena: std.mem.Allocator, source: ArtifactBytes, label: []const u8, format: []const u8) !Artifact {
-    if (source.config.len > 1 << 20 or source.weights.len > max_weights_bytes) return error.ArtifactTooLarge;
+fn parseArtifact(arena: std.mem.Allocator, source: ArtifactBytes, label: []const u8, format: []const u8) !Artifact {
+    if (source.config.len > max_config_bytes or source.weights.len > max_weights_bytes) return error.ArtifactTooLarge;
     const config = std.json.parseFromSliceLeaky(std.json.Value, arena, source.config, .{}) catch
         return error.InvalidConfig;
 
@@ -82,7 +86,7 @@ pub fn parseArtifact(arena: std.mem.Allocator, source: ArtifactBytes, label: []c
     return .{ .config = config, .weights = try st.File.parse(arena, source.weights), .sha256 = hex };
 }
 
-pub fn jsonPath(root: std.json.Value, keys: []const []const u8) ?std.json.Value {
+fn jsonPath(root: std.json.Value, keys: []const []const u8) ?std.json.Value {
     var value = root;
     for (keys) |key| {
         if (value != .object) return null;
@@ -100,28 +104,64 @@ fn jsonNumber(value: std.json.Value) ?f64 {
     };
 }
 
+/// A loaded keyword model with its two frozen encoders.
+///
+/// A Model is immutable after loading: `keyword`, `threshold` and `detect`
+/// may run concurrently from several threads, each `detect` call with its own
+/// scratch allocator. Release it with `deinit`.
 pub const Model = struct {
+    /// Owns the decoded weights and everything else the model retains.
+    arena: std.heap.ArenaAllocator,
     network: network_mod.Network,
     google: google_mod.Google,
     g2p: text_mod.G2p,
+    /// Calibrated operating points from the model's config.json.
     thresholds: []const Threshold,
 
-    /// Everything, including the weights, is allocated from `arena`; keep it
-    /// alive as long as the model.
-    pub fn load(io: std.Io, arena: std.mem.Allocator, model_dir: []const u8, google_dir: []const u8, g2p_dir: []const u8) !Model {
-        const main = try readArtifact(io, arena, model_dir, "naptrap-phonmatchnet-v1");
-        const google = try readArtifact(io, arena, google_dir, "naptrap-google-speech-embedding-v1");
-        const g2p = try readArtifact(io, arena, g2p_dir, "naptrap-g2p-en-decoder-v1");
-        return fromArtifacts(arena, main, google, g2p);
+    const formats = [3][]const u8{ "naptrap-phonmatchnet-v1", "naptrap-google-speech-embedding-v1", "naptrap-g2p-en-decoder-v1" };
+
+    /// Load the three artifact directories, each holding config.json and
+    /// model.safetensors. The file contents are freed before returning; the
+    /// model retains only its decoded weights, allocated from `gpa`.
+    pub fn load(io: std.Io, gpa: std.mem.Allocator, model_dir: []const u8, google_dir: []const u8, g2p_dir: []const u8) !Model {
+        const dirs = [3][]const u8{ model_dir, google_dir, g2p_dir };
+        var files: [3]ArtifactBytes = undefined;
+        var read: usize = 0;
+        defer for (files[0..read]) |f| {
+            gpa.free(f.config);
+            gpa.free(f.weights);
+        };
+        for (&files, dirs) |*f, dir| {
+            f.* = try readArtifact(io, gpa, dir);
+            read += 1;
+        }
+        return fromSources(gpa, files, dirs);
     }
 
-    /// Load without file I/O. All retained model data is copied into arena;
-    /// the input byte buffers may be released after this function returns.
-    pub fn fromBytes(arena: std.mem.Allocator, main_bytes: ArtifactBytes, google_bytes: ArtifactBytes, g2p_bytes: ArtifactBytes) !Model {
-        const main = try parseArtifact(arena, main_bytes, "phonmatchnet", "naptrap-phonmatchnet-v1");
-        const google = try parseArtifact(arena, google_bytes, "google", "naptrap-google-speech-embedding-v1");
-        const g2p = try parseArtifact(arena, g2p_bytes, "g2p", "naptrap-g2p-en-decoder-v1");
-        return fromArtifacts(arena, main, google, g2p);
+    /// Load from in-memory artifacts without file I/O. All retained data is
+    /// copied, so the input buffers may be released after this returns.
+    pub fn fromBytes(gpa: std.mem.Allocator, main_bytes: ArtifactBytes, google_bytes: ArtifactBytes, g2p_bytes: ArtifactBytes) !Model {
+        return fromSources(gpa, .{ main_bytes, google_bytes, g2p_bytes }, .{ "phonmatchnet", "google", "g2p" });
+    }
+
+    /// Free everything the model owns. Keywords and streams created from it
+    /// must not be used afterwards.
+    pub fn deinit(self: *Model) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    fn fromSources(gpa: std.mem.Allocator, sources: [3]ArtifactBytes, labels: [3][]const u8) !Model {
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        errdefer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var artifacts: [3]Artifact = undefined;
+        for (&artifacts, sources, labels, formats) |*artifact, source, label, format| {
+            artifact.* = try parseArtifact(arena, source, label, format);
+        }
+        var model = try fromArtifacts(arena, artifacts[0], artifacts[1], artifacts[2]);
+        model.arena = arena_state;
+        return model;
     }
 
     fn fromArtifacts(arena: std.mem.Allocator, main: Artifact, google: Artifact, g2p: Artifact) !Model {
@@ -161,6 +201,7 @@ pub const Model = struct {
         if (thresholds.items.len == 0) return error.InvalidConfig;
 
         return .{
+            .arena = undefined, // set by fromSources
             .network = try network_mod.Network.init(arena, main.weights),
             .google = try google_mod.Google.init(arena, google.weights),
             .g2p = g2p_encoder,
@@ -168,6 +209,9 @@ pub const Model = struct {
         };
     }
 
+    /// The score threshold for the calibrated false-accept rate `far`, which
+    /// must exactly equal one of `thresholds` (0.01 or 0.1 for the released
+    /// model); otherwise error.UnknownOperatingPoint.
     pub fn threshold(self: Model, far: f64) !f64 {
         for (self.thresholds) |t| {
             if (t.far == far) return t.value;
@@ -175,13 +219,19 @@ pub const Model = struct {
         return error.UnknownOperatingPoint;
     }
 
-    /// Precompute a keyword's text features; reuse across clips.
-    pub fn keyword(self: Model, arena: std.mem.Allocator, keyword_text: []const u8) !Keyword {
-        return self.g2p.encode(arena, keyword_text);
+    /// Normalize `keyword_text` and compute its text features once, for reuse
+    /// across clips. The result is allocated from `gpa`; free it with
+    /// `Keyword.deinit`.
+    pub fn keyword(self: Model, gpa: std.mem.Allocator, keyword_text: []const u8) !Keyword {
+        return self.g2p.encode(gpa, keyword_text);
     }
 
-    /// Score one mono 16 kHz clip of 0.5-2 s, samples in [-1, 1].
-    /// `scratch` holds per-call buffers; an arena you reset per clip works well.
+    /// Score one mono 16 kHz clip of 0.5-2 s (8000-32000 samples), samples
+    /// finite and in [-1, 1], against `kw` at operating point `far`.
+    ///
+    /// `scratch` receives about 2-3 MiB of per-call buffers that are never
+    /// freed individually: pass an arena (or a FixedBufferAllocator) and
+    /// reset it between calls, e.g. `arena.reset(.retain_capacity)`.
     pub fn detect(self: Model, scratch: std.mem.Allocator, wave: []const f32, kw: Keyword, far: f64) !Prediction {
         const limit = try self.threshold(far);
         try validateKeyword(kw);

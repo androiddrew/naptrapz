@@ -194,10 +194,11 @@ Call `naptrap_has_embedded_models()` to inspect availability and
 `naptrap_model_load_embedded(&model)` to load it with no filesystem access.
 `naptrap_model_load(...)` always honors its explicit paths. For Zig consumers,
 the build exports the `naptrap_bundled` module with `available` and
-`load(allocator)`. The core `naptrap` module remains independent of build options;
-`Model.fromBytes(allocator, phonmatchnet_bytes, google_bytes, g2p_bytes)` also
+`load(gpa)`. The core `naptrap` module remains independent of build options;
+`Model.fromBytes(gpa, phonmatchnet_bytes, google_bytes, g2p_bytes)` also
 accepts caller-provided `{config, weights}` byte slices and copies all retained
-model data into the supplied allocator.
+model data, so the inputs can be freed afterwards. Release either kind of model
+with `model.deinit()`.
 
 Zig consumers see load diagnostics through `std.log` under the `.naptrap` and
 `.safetensors` scopes; filter them with `std_options.log_scope_levels`.
@@ -287,14 +288,17 @@ arena. Model loading took about 11 ms and encoding `hey computer` about 1 ms.
 These are host-specific measurements, not a latency guarantee. The CLI's median
 end-to-end time over the speech corpus was about 38 ms, including model loading.
 
-For repeated detection, keep `Model` and its allocation arena alive, compute
-`keyword()` once, and pass a separate scratch arena to `detect()`. Reset that
-arena with `.retain_capacity` between clips. The measured scratch capacity for a
+For repeated detection, keep the `Model` loaded, compute `keyword()` once, and
+pass a scratch arena to `detect()`. `detect()` never frees its per-call buffers
+individually, so `scratch` must be an arena (or a `FixedBufferAllocator`); reset
+it with `.retain_capacity` between clips. The measured scratch capacity for a
 1.5-second clip is about **2.16 MiB**, down from 8.1 MiB (a 73% reduction). A
 2-second clip used about **2.68 MiB**; alternating supported clip lengths stayed
 at that capacity over 40 calls after warm-up. These figures exclude model and
-keyword storage and the stream's ring/window buffers. Keyword features must
-outlive their use and must not be allocated from an arena reset between detections.
+keyword storage and the stream's ring/window buffers. `Model.load` frees the raw
+file contents before returning, so a loaded model holds only its decoded weights.
+Keywords own their memory (`kw.deinit(gpa)`) and must outlive the detections and
+streams that use them.
 
 The remaining matcher averaged about 4.68 ms in a 50-iteration profile: 2.77 ms
 in the two audio convolutions/normalizations, 0.29 ms in Google upsampling, and

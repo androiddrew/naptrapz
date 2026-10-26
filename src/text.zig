@@ -151,17 +151,29 @@ pub const G2p = struct {
         };
     }
 
+    /// A keyword's text features. Owns its memory; see `deinit`.
     pub const Features = struct {
         /// Normalized keyword text.
         text: []const u8,
         /// [rows][size]
         data: []const f32,
         rows: usize,
+
+        /// Free memory returned by `G2p.encode` (or `Model.keyword`).
+        pub fn deinit(self: Features, gpa: std.mem.Allocator) void {
+            gpa.free(self.text);
+            gpa.free(self.data);
+        }
     };
 
-    /// Normalize `keyword` and compute its decoder-state rows. Encoding stops
-    /// with error.FeatureLengthOutOfRange as soon as it exceeds `max_rows`.
-    pub fn encode(self: G2p, arena: std.mem.Allocator, keyword: []const u8) !Features {
+    /// Normalize `keyword` and compute its decoder-state rows, allocated from
+    /// `gpa`. Encoding stops with error.FeatureLengthOutOfRange as soon as it
+    /// exceeds `max_rows`.
+    pub fn encode(self: G2p, gpa: std.mem.Allocator, keyword: []const u8) !Features {
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
         const normalized = try normalize(arena, keyword);
         var rows: std.ArrayList(f32) = .empty;
         const work: Work = .{
@@ -177,7 +189,10 @@ pub const G2p = struct {
             try self.encodeWord(arena, w, &rows, work);
         }
         if (rows.items.len == 0) return error.NoPhoneticFeatures;
-        return .{ .text = normalized, .data = rows.items, .rows = rows.items.len / self.size };
+
+        const text = try gpa.dupe(u8, normalized);
+        errdefer gpa.free(text);
+        return .{ .text = text, .data = try gpa.dupe(f32, rows.items), .rows = rows.items.len / self.size };
     }
 
     const Work = struct { h: []f32, scratch: []f32, logits: []f32 };
