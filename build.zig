@@ -70,10 +70,16 @@ pub fn build(b: *std.Build) void {
     const static_name = if (target.result.os.tag == .windows) "naptrap_static" else "naptrap";
     const static = b.addLibrary(.{ .name = static_name, .linkage = .static, .root_module = c_module });
     static.bundle_compiler_rt = true;
+    // Zig's self-hosted Debug backend omits .note.GNU-stack, which makes linkers
+    // give the host program an executable stack. LLVM always emits it.
+    static.use_llvm = true;
+    // Don't export Zig's UBSan runtime symbols into C hosts.
+    static.bundle_ubsan_rt = false;
     static.installHeader(b.path("include/naptrap.h"), "naptrap.h");
     b.installArtifact(static);
     if (!target.result.cpu.arch.isWasm()) {
         const shared = b.addLibrary(.{ .name = "naptrap", .linkage = .dynamic, .root_module = c_module });
+        shared.bundle_ubsan_rt = false; // keep the export table to naptrap_*
         b.installArtifact(shared);
     }
 
