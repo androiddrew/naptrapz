@@ -104,7 +104,7 @@ pub const Stream = struct {
     pub fn push(self: *Stream, samples: []const f32, context: anytype, comptime emit: fn (@TypeOf(context), Event) anyerror!void) !void {
         for (samples) |x| if (!std.math.isFinite(x) or @abs(x) > 1) return error.InvalidSamples;
         const final_end = std.math.add(u64, self.total_samples, samples.len) catch return error.SampleCounterOverflow;
-        if (final_end > std.math.maxInt(u64) - self.config.hop_samples) return error.SampleCounterOverflow;
+        if (final_end > std.math.maxInt(u64) - @as(u64, self.config.hop_samples)) return error.SampleCounterOverflow;
         var offset: usize = 0;
         while (offset < samples.len) {
             const count: usize = @intCast(@min(samples.len - offset, self.next_end - self.total_samples));
