@@ -118,26 +118,57 @@ pub const Google = struct {
 
     /// log_mel is [frames][32].
     pub fn encodeLogMel(self: Google, arena: std.mem.Allocator, log_mel: []const f32, frames: usize) !Embeddings {
-        std.debug.assert(log_mel.len == frames * features.google_mels);
-        const input = try arena.dupe(f32, log_mel);
-        var x = ops.Map{ .data = input, .c = 1, .h = frames, .w = features.google_mels };
-
-        x = try ops.conv2d(arena, x, self.initial, 24, 3, 3, 0, 1);
+        if (log_mel.len != frames * features.google_mels) return error.ShapeMismatch;
+        const rows = try embeddingRows(frames);
+        // Allocate the result before temporary storage, so an ArenaAllocator
+        // can reclaim the latter for the matcher on this same inference call.
+        const result = try arena.alloc(f32, rows * embedding_size);
+        errdefer arena.free(result);
+        const capacity = 24 * (frames - 2) * features.google_mels;
+        const workspace = try arena.alloc(f32, capacity * 2);
+        defer arena.free(workspace);
+        const patches = try arena.alloc(ops.ConvVector, 96 * 3);
+        defer arena.free(patches);
+        const buffers = [2][]f32{ workspace[0..capacity], workspace[capacity..] };
+        const input = ops.ConstMap{ .data = log_mel, .c = 1, .h = frames, .w = features.google_mels };
+        var x = try ops.conv2dInto(buffers[0], patches, input, self.initial, 24, 3, 3, 0, 1);
+        var next: usize = 1;
         ops.relu(x.data);
         self.norms[0].apply(x.data, x.h * x.w);
         activation(x.data);
 
         for (self.layers, 1..) |layer, norm| {
-            x = try ops.conv2d(arena, x, layer.weight, layer.c_out, layer.kh, layer.kw, layer.ph, layer.pw);
+            x = try ops.conv2dInto(buffers[next], patches, x.readOnly(), layer.weight, layer.c_out, layer.kh, layer.kw, layer.ph, layer.pw);
+            next = 1 - next;
             self.norms[norm].apply(x.data, x.h * x.w);
             activation(x.data);
-            if (layer.pool_h != 0) x = try ops.maxPool2d(arena, x, layer.pool_h, layer.pool_w);
+            if (layer.pool_h != 0) {
+                x = try ops.maxPool2dInto(buffers[next], x.readOnly(), layer.pool_h, layer.pool_w);
+                next = 1 - next;
+            }
         }
 
-        const y = try ops.conv2d(arena, x, self.output, embedding_size, 3, 1, 0, 0);
-        if (y.w != 1) return error.UnexpectedEmbeddingShape;
+        const y = try ops.conv2dInto(buffers[next], patches, x.readOnly(), self.output, embedding_size, 3, 1, 0, 0);
+        if (y.w != 1 or y.h != rows) return error.UnexpectedEmbeddingShape;
         // [96][G][1] -> [G][96]
-        return .{ .data = try ops.transpose(arena, y.data, embedding_size, y.h), .rows = y.h };
+        for (0..rows) |row| for (0..embedding_size) |column| {
+            result[row * embedding_size + column] = y.data[column * rows + row];
+        };
+        return .{ .data = result, .rows = rows };
+    }
+
+    fn embeddingRows(frames: usize) !usize {
+        if (frames < 3) return error.InputTooShort;
+        var height = frames - 2;
+        for (0..18) |i| {
+            if (i % 2 == 1) {
+                if (height < 3) return error.InputTooShort;
+                height -= 2;
+            }
+            if (i == 1 or i == 9 or i == 17) height /= 2;
+        }
+        if (height < 3) return error.InputTooShort;
+        return height - 2;
     }
 
     pub fn embed(self: Google, arena: std.mem.Allocator, dft: features.Dft, wave: []const f32) !Embeddings {

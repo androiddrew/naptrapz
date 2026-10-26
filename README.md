@@ -224,7 +224,10 @@ python3.12 tools/generate_unicode.py --out src/unicode_data.zig --check
 
 The convolution kernel packs eight spatial positions at a time and uses SIMD
 across them, preserving the per-output accumulation order. Mel projections also
-use SIMD. No BLAS, FFT or Unicode library is required at runtime.
+use SIMD. The Google encoder alternates between two caller-owned feature buffers
+and reuses its convolution patch storage. The matcher feeds attention rows
+directly into its GRU instead of retaining full attention/output sequences.
+No BLAS, FFT or Unicode library is required at runtime.
 
 On the validation Linux/x86_64 host, a warm 1.5-second inference averaged about
 **22 ms**, down from **251 ms**, over 30 iterations with a reused model and scratch
@@ -235,13 +238,22 @@ end-to-end time over the speech corpus was about 38 ms, including model loading.
 For repeated detection, keep `Model` and its allocation arena alive, compute
 `keyword()` once, and pass a separate scratch arena to `detect()`. Reset that
 arena with `.retain_capacity` between clips. The measured scratch capacity for a
-1.5-second clip was about 8.1 MiB. Keyword features must outlive their use and
-must not be allocated from an arena reset between detections.
+1.5-second clip is about **2.16 MiB**, down from 8.1 MiB (a 73% reduction). A
+2-second clip used about **2.68 MiB**; alternating supported clip lengths stayed
+at that capacity over 40 calls after warm-up. These figures exclude model and
+keyword storage and the stream's ring/window buffers. Keyword features must
+outlive their use and must not be allocated from an arena reset between detections.
+
+The remaining matcher averaged about 4.68 ms in a 50-iteration profile: 2.77 ms
+in the two audio convolutions/normalizations, 0.29 ms in Google upsampling, and
+approximately 1.62 ms in projections, attention, GRU and other work. Audio Conv1d
+is the next measured compute optimization target; this memory change keeps
+inference around 22 ms and preserves numerical parity.
 
 ## Next steps
 
 - Streaming listener and reusable detector: implemented (see above).
-- Reduce intermediate feature-map storage and profile the remaining matcher work.
+- Bounded intermediate feature storage and matcher profiling: implemented (see above).
 - C ABI for model, keyword, detection and streaming handles: implemented (see above).
 - Optionally `@embedFile` the weights into a single static binary.
 

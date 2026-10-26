@@ -130,29 +130,27 @@ pub const Network = struct {
         const qkv = try arena.alloc(f32, s * 3 * d);
         ops.linear(qkv, joint, s, self.in_w, self.in_b, d, 3 * d);
         const scale: f32 = 1.0 / @sqrt(@as(f32, d));
-        const attn = try arena.alloc(f32, s * d);
-        @memset(attn, 0);
-        const weights = try arena.alloc(f32, s);
-        const q = try arena.alloc(f32, d);
+        // Attention rows are independent. Project each row and advance the GRU
+        // immediately instead of retaining two complete [s,128] intermediates.
+        var weights_buffer: [228]f32 = undefined; // ceil(200/2) audio + 128 text
+        const weights = weights_buffer[0..s];
+        var q: [d]f32 = undefined;
+        var row: [d]f32 = undefined;
+        var attended: [d]f32 = undefined;
+        var h = [_]f32{0} ** d;
+        var scratch: [6 * d]f32 = undefined;
         for (0..s) |i| {
-            for (q, qkv[i * 3 * d ..][0..d]) |*dst, src| dst.* = src * scale;
-            for (0..i + 1) |j| weights[j] = ops.dot(q, qkv[j * 3 * d + d ..][0..d]);
+            for (&q, qkv[i * 3 * d ..][0..d]) |*dst, src| dst.* = src * scale;
+            for (0..i + 1) |j| weights[j] = ops.dot(&q, qkv[j * 3 * d + d ..][0..d]);
             ops.softmax(weights[0 .. i + 1]);
-            const row = attn[i * d ..][0..d];
+            @memset(&row, 0);
             for (0..i + 1) |j| {
                 const v = qkv[j * 3 * d + 2 * d ..][0..d];
-                for (row, v) |*a, vv| a.* += weights[j] * vv;
+                for (&row, v) |*a, vv| a.* += weights[j] * vv;
             }
+            ops.linear(&attended, &row, 1, self.out_w, self.out_b, d, d);
+            self.gru.step(&attended, &h, &scratch);
         }
-        const attended = try arena.alloc(f32, s * d);
-        ops.linear(attended, attn, s, self.out_w, self.out_b, d, d);
-
-        // GRU over the sequence; keep the final hidden state.
-        const h = try arena.alloc(f32, d);
-        @memset(h, 0);
-        const scratch = try arena.alloc(f32, 6 * d);
-        for (0..s) |i| self.gru.step(attended[i * d ..][0..d], h, scratch);
-
-        return ops.dot(self.head_w, h) + self.head_b[0];
+        return ops.dot(self.head_w, &h) + self.head_b[0];
     }
 };

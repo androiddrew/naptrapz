@@ -180,7 +180,14 @@ pub const Map = struct {
     c: usize,
     h: usize,
     w: usize,
+
+    pub fn readOnly(self: Map) ConstMap {
+        return .{ .data = self.data, .c = self.c, .h = self.h, .w = self.w };
+    }
 };
+
+pub const ConstMap = struct { data: []const f32, c: usize, h: usize, w: usize };
+pub const ConvVector = @Vector(8, f32);
 
 /// Stride-1 Conv2d without bias, zero padding (ph, pw).
 pub fn conv2d(alloc: std.mem.Allocator, x: Map, w: []const f32, c_out: usize, kh: usize, kw: usize, ph: usize, pw: usize) !Map {
@@ -192,13 +199,27 @@ pub fn conv2d(alloc: std.mem.Allocator, x: Map, w: []const f32, c_out: usize, kh
     const inner = x.c * kh * kw;
     const out = try alloc.alloc(f32, c_out * plane);
     errdefer alloc.free(out);
+    const patches = try alloc.alloc(ConvVector, inner);
+    defer alloc.free(patches);
+    return conv2dInto(out, patches, x.readOnly(), w, c_out, kh, kw, ph, pw);
+}
+
+/// Caller-owned, non-overlapping output and patch buffers. Returned Map is a
+/// view into out. Reuse buffers across layers to bound feature-map storage.
+pub fn conv2dInto(out: []f32, workspace: []ConvVector, x: ConstMap, w: []const f32, c_out: usize, kh: usize, kw: usize, ph: usize, pw: usize) !Map {
+    if (kh == 0 or kw == 0 or x.h + 2 * ph < kh or x.w + 2 * pw < kw) return error.InputTooShort;
+    const oh = x.h + 2 * ph - kh + 1;
+    const ow = x.w + 2 * pw - kw + 1;
+    const plane = oh * ow;
+    const inner = x.c * kh * kw;
+    if (out.len < c_out * plane or workspace.len < inner or w.len != c_out * inner or x.data.len != x.c * x.h * x.w)
+        return error.ShapeMismatch;
+    const patches = workspace[0..inner];
     // Pack only eight spatial positions at a time, then reuse their patches
     // across every output channel. This removes padding branches from the
     // multiply-accumulate loop without allocating a full im2col matrix.
     // Each SIMD lane follows the original c/kh/kw accumulation order.
-    const V = @Vector(8, f32);
-    const patches = try alloc.alloc(V, inner);
-    defer alloc.free(patches);
+    const V = ConvVector;
     var at: usize = 0;
     while (at < plane) : (at += 8) {
         const lanes = @min(8, plane - at);
@@ -223,7 +244,7 @@ pub fn conv2d(alloc: std.mem.Allocator, x: Map, w: []const f32, c_out: usize, kh
             @memcpy(out[o * plane + at ..][0..lanes], values[0..lanes]);
         }
     }
-    return .{ .data = out, .c = c_out, .h = oh, .w = ow };
+    return .{ .data = out[0 .. c_out * plane], .c = c_out, .h = oh, .w = ow };
 }
 
 /// MaxPool2d with kernel == stride, floor mode (PyTorch default).
@@ -231,6 +252,16 @@ pub fn maxPool2d(alloc: std.mem.Allocator, x: Map, kh: usize, kw: usize) !Map {
     const oh = x.h / kh;
     const ow = x.w / kw;
     const out = try alloc.alloc(f32, x.c * oh * ow);
+    errdefer alloc.free(out);
+    return maxPool2dInto(out, x.readOnly(), kh, kw);
+}
+
+/// Caller-owned output, which must not overlap the input.
+pub fn maxPool2dInto(out: []f32, x: ConstMap, kh: usize, kw: usize) !Map {
+    if (kh == 0 or kw == 0) return error.InputTooShort;
+    const oh = x.h / kh;
+    const ow = x.w / kw;
+    if (out.len < x.c * oh * ow or x.data.len != x.c * x.h * x.w) return error.ShapeMismatch;
     for (0..x.c) |c| {
         for (0..oh) |y| {
             for (0..ow) |xx| {
@@ -242,7 +273,7 @@ pub fn maxPool2d(alloc: std.mem.Allocator, x: Map, kh: usize, kw: usize) !Map {
             }
         }
     }
-    return .{ .data = out, .c = x.c, .h = oh, .w = ow };
+    return .{ .data = out[0 .. x.c * oh * ow], .c = x.c, .h = oh, .w = ow };
 }
 
 const testing = std.testing;
