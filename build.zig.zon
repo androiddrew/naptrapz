@@ -1,7 +1,6 @@
 .{
     .name = .naptrap_zig,
     .version = "0.1.0",
-    // If Zig rejects this value, it prints a suggested fingerprint; paste that in.
     .fingerprint = 0x63d51476e8a11e0d,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
