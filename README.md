@@ -26,6 +26,7 @@ decisions match Python, with maximum score difference below `2e-6` in ReleaseFas
 | `src/wav.zig` | Mono 16 kHz 16-bit PCM WAV reader |
 | `src/main.zig` | CLI with the same JSON output and exit codes as `naptrap detect` |
 | `src/stream.zig` | Chunk-independent sliding windows, sample timestamps and debounced wake events |
+| `src/c_api.zig`, `include/naptrap.h` | Versioned native ABI with reference-counted model, keyword and stream handles |
 | `src/parity.zig` | Compares each stage against PyTorch fixtures |
 | `tools/dump_fixtures.py` | Writes those fixtures from the Python model |
 | `tools/generate_unicode.py` | Rebuilds/checks the versioned Unicode source table with Python 3.12 |
@@ -97,6 +98,60 @@ chunks leave state unchanged; reset after other push/callback failures. Call
 `deinit()` when finished. Feed already resampled 16 kHz audio: capture/resampling
 and VAD/STT/TTS remain the host application's responsibilities. Repeated-window
 false-alarm rates need evaluation separately from the per-clip FAR calibration.
+
+## Embedding through the C ABI
+
+The normal build also installs `lib/libnaptrap.so`, `lib/libnaptrap.a` (platform
+equivalents on other targets), and `include/naptrap.h`. ABI version **1** uses
+opaque handles, fixed-width result fields, explicit status codes and thread-local
+error messages. The static archive is position-independent and includes Zig's
+compiler runtime, so a normal C compiler can link it into a PIE executable.
+
+```sh
+# Shared library (set an appropriate runtime search path for your installation):
+cc app.c -I ../work/include -L ../work/lib -lnaptrap -o ../work/app
+# Static library:
+cc app.c -I ../work/include ../work/lib/libnaptrap.a -o ../work/app
+```
+
+Typical C use, with application-owned mono 16 kHz float samples:
+
+```c
+#include <naptrap.h>
+#include <stdio.h>
+
+int score(const float *samples, size_t count, naptrap_prediction *prediction) {
+    naptrap_model *model = NULL;
+    naptrap_keyword *keyword = NULL;
+    naptrap_status status = naptrap_model_load("models/phonmatchnet", "models/google",
+                                              "models/g2p", &model);
+    if (status == NAPTRAP_OK)
+        status = naptrap_keyword_create(model, "hey computer", 12, &keyword);
+    if (status == NAPTRAP_OK)
+        status = naptrap_detect(model, keyword, samples, count, NAPTRAP_SAMPLE_RATE,
+                                0.01, prediction);
+    if (status != NAPTRAP_OK) fprintf(stderr, "%s\n", naptrap_last_error());
+    naptrap_keyword_release(keyword);
+    naptrap_model_release(model);
+    return status;
+}
+```
+
+In a long-running application, load the model and keyword once and reuse them.
+`naptrap_stream_create` / `naptrap_stream_push` expose the streaming detector with
+a synchronous callback for every complete window. Inspect `event->triggered` for
+wakes. `naptrap_stream_config_default` fills the standard settings; a NULL config
+also selects defaults. `naptrap_stream_reset` starts a fresh audio timeline.
+
+A keyword retains its model and a stream retains its keyword; you may release
+parent references while dependent handles are alive. Release each returned
+reference exactly once. NULL release calls succeed. Serialize operations on
+handles sharing a model; separate models can run concurrently. Reentrant/busy
+operations fail with `NAPTRAP_BUSY`, including releases attempted from callbacks.
+Do not retain callback event pointers: copy the event instead. The full contracts
+and error codes are in `include/naptrap.h`. Python `ctypes`, Rust FFI and Swift's C
+interoperability can use this same interface; Python and native C consumers are
+included in the external validation suite.
 
 ## Parity workflow
 
@@ -187,7 +242,7 @@ must not be allocated from an arena reset between detections.
 
 - Streaming listener and reusable detector: implemented (see above).
 - Reduce intermediate feature-map storage and profile the remaining matcher work.
-- Export a C ABI (`keyword`, `detect`) so Python, Swift or Rust can call it.
+- C ABI for model, keyword, detection and streaming handles: implemented (see above).
 - Optionally `@embedFile` the weights into a single static binary.
 
 ## License

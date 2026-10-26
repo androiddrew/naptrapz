@@ -24,6 +24,22 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // Native ABI for C/C++, ctypes, Swift, Rust, etc. Both variants expose the
+    // same versioned header; no Zig allocator or error union crosses the ABI.
+    const c_module = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .pic = true,
+        .imports = &.{.{ .name = "naptrap", .module = lib }},
+    });
+    const shared = b.addLibrary(.{ .name = "naptrap", .linkage = .dynamic, .root_module = c_module });
+    const static = b.addLibrary(.{ .name = "naptrap", .linkage = .static, .root_module = c_module });
+    static.bundle_compiler_rt = true;
+    shared.installHeader(b.path("include/naptrap.h"), "naptrap.h");
+    b.installArtifact(shared);
+    b.installArtifact(static);
+
     const run = b.addRunArtifact(exe);
     if (b.args) |args| run.addArgs(args);
     b.step("run", "Run the naptrap CLI").dependOn(&run.step);

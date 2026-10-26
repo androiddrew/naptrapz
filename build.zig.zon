@@ -10,6 +10,7 @@
         "build.zig.zon",
         "src",
         "tools",
+        "include",
         "README.md",
     },
 }
