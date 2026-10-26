@@ -105,7 +105,8 @@ false-alarm rates need evaluation separately from the per-clip FAR calibration.
 The normal build also installs `lib/libnaptrap.so`, `lib/libnaptrap.a` (platform
 equivalents on other targets), and `include/naptrap.h`. ABI version **1** uses
 opaque handles, fixed-width result fields, explicit status codes and thread-local
-error messages. The static archive is position-independent and includes Zig's
+error messages. The library never writes to stdout or stderr; diagnostics that
+the Zig code logs are appended to `naptrap_last_error()`. The static archive is position-independent and includes Zig's
 compiler runtime, so a normal C compiler can link it into a PIE executable.
 
 ```sh
@@ -195,6 +196,9 @@ the build exports the `naptrap_bundled` module with `available` and
 `Model.fromBytes(allocator, phonmatchnet_bytes, google_bytes, g2p_bytes)` also
 accepts caller-provided `{config, weights}` byte slices and copies all retained
 model data into the supplied allocator.
+
+Zig consumers see load diagnostics through `std.log` under the `.naptrap` and
+`.safetensors` scopes; filter them with `std_options.log_scope_levels`.
 
 Embedded and filesystem loaders share format, SHA-256, encoder-pin, provenance,
 dimension and threshold validation. Embedding does not bypass these checks.

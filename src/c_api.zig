@@ -6,17 +6,33 @@ const allocator = std.heap.page_allocator;
 
 const Status = enum(c_int) { ok = 0, invalid_argument, invalid_audio, invalid_keyword, unknown_far, model_error, out_of_memory, busy, internal_error };
 threadlocal var diagnostic: [256:0]u8 = @splat(0);
+// The first library log message since the last status was returned. It is
+// appended to the error name, so the library never writes to the host's stderr.
+threadlocal var detail: [192]u8 = undefined;
+threadlocal var detail_len: usize = 0;
+
+pub const std_options: std.Options = .{ .logFn = captureLog };
+
+fn captureLog(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    if (@intFromEnum(level) > @intFromEnum(std.log.Level.warn) or detail_len != 0) return;
+    const prefix = if (scope == .default or scope == .naptrap) "" else @tagName(scope) ++ ": ";
+    var writer: std.Io.Writer = .fixed(&detail);
+    writer.print(prefix ++ format, args) catch {};
+    detail_len = writer.end;
+}
 
 fn success() c_int {
     diagnostic[0] = 0;
+    detail_len = 0;
     return @intFromEnum(Status.ok);
 }
 
 fn fail(err: anyerror, fallback: Status) c_int {
-    const name = @errorName(err);
-    const count = @min(name.len, diagnostic.len - 1);
-    @memcpy(diagnostic[0..count], name[0..count]);
-    diagnostic[count] = 0;
+    var writer: std.Io.Writer = .fixed(diagnostic[0 .. diagnostic.len - 1]);
+    writer.writeAll(@errorName(err)) catch {};
+    if (detail_len != 0) writer.print(": {s}", .{detail[0..detail_len]}) catch {};
+    diagnostic[writer.end] = 0;
+    detail_len = 0;
     const status: Status = switch (err) {
         error.OutOfMemory => .out_of_memory,
         error.InvalidArgument, error.InvalidStreamConfig, error.SampleCounterOverflow => .invalid_argument,

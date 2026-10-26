@@ -64,7 +64,10 @@ uint32_t naptrap_has_embedded_models(void);
 /* No filesystem access. NAPTRAP_MODEL_ERROR when not built with embedded models. */
 naptrap_status naptrap_model_load_embedded(naptrap_model **out);
 /* Thread-local diagnostic, valid until the next status-returning call on this
- * thread. Success clears it. Never free this pointer. */
+ * thread: the error name, optionally followed by ": " and details, such as
+ * "WrongArtifactFormat: models/google is not a naptrap-phonmatchnet-v1 artifact".
+ * Success clears it. Never free this pointer. The library never writes to
+ * stdout or stderr. */
 const char *naptrap_last_error(void);
 
 /* Paths are NUL-terminated UTF-8. Returned handles are NULL on failure.

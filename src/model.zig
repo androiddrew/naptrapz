@@ -14,6 +14,8 @@ const google_mod = @import("google.zig");
 const text_mod = @import("text.zig");
 const network_mod = @import("phonmatchnet.zig");
 
+const log = std.log.scoped(.naptrap);
+
 pub const weights_file = "model.safetensors";
 const max_weights_bytes = 256 << 20;
 
@@ -64,7 +66,7 @@ pub fn parseArtifact(arena: std.mem.Allocator, source: ArtifactBytes, label: []c
 
     const found = jsonPath(config, &.{"format"}) orelse return error.InvalidConfig;
     if (found != .string or !std.mem.eql(u8, found.string, format)) {
-        std.log.err("{s} is not a {s} artifact", .{ label, format });
+        log.err("{s} is not a {s} artifact", .{ label, format });
         return error.WrongArtifactFormat;
     }
 
@@ -74,7 +76,7 @@ pub fn parseArtifact(arena: std.mem.Allocator, source: ArtifactBytes, label: []c
 
     const expected = jsonPath(config, &.{ "sha256", weights_file }) orelse return error.InvalidConfig;
     if (expected != .string or !std.mem.eql(u8, expected.string, &hex)) {
-        std.log.err("{s} checksum mismatch in {s}", .{ weights_file, label });
+        log.err("{s} checksum mismatch in {s}", .{ weights_file, label });
         return error.ChecksumMismatch;
     }
     return .{ .config = config, .weights = try st.File.parse(arena, source.weights), .sha256 = hex };
@@ -128,7 +130,7 @@ pub const Model = struct {
         inline for (.{ .{ "google", &google }, .{ "g2p", &g2p } }) |pair| {
             if (jsonPath(main.config, &.{ "requires", pair[0], "sha256" })) |pinned| {
                 if (pinned != .string or !std.mem.eql(u8, pinned.string, &pair[1].sha256)) {
-                    std.log.err("the {s} encoder is not the one this model was trained with", .{pair[0]});
+                    log.err("the {s} encoder is not the one this model was trained with", .{pair[0]});
                     return error.EncoderMismatch;
                 }
             }
