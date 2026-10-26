@@ -21,54 +21,49 @@ pub const keyword_mels = 40;
 pub const google_mels = 32;
 pub const google_left_pad = 11120;
 
-// Keep the original public name so callers of Dft.init/power stay compatible.
-pub const Dft = struct {
-    cos: []f64, // n_fft / 2 twiddle factors
-    sin: []f64,
-
-    pub fn init(alloc: std.mem.Allocator) !Dft {
-        const cos = try alloc.alloc(f64, n_fft / 2);
-        errdefer alloc.free(cos);
-        const sin = try alloc.alloc(f64, n_fft / 2);
-        for (0..n_fft / 2) |k| {
-            const phase = @as(f64, @floatFromInt(k)) * (2.0 * std.math.pi / @as(f64, n_fft));
-            cos[k] = @cos(phase);
-            sin[k] = -@sin(phase);
-        }
-        cos[n_fft / 4] = 0;
-        return .{ .cos = cos, .sin = sin };
+/// Radix-2 twiddle factors e^(-2*pi*i*k/n_fft) for k < n_fft / 2.
+const twiddles = blk: {
+    @setEvalBranchQuota(10_000);
+    var cos: [n_fft / 2]f64 = undefined;
+    var sin: [n_fft / 2]f64 = undefined;
+    for (0..n_fft / 2) |k| {
+        const phase = @as(f64, @floatFromInt(k)) * (2.0 * std.math.pi / @as(f64, n_fft));
+        cos[k] = @cos(phase);
+        sin[k] = -@sin(phase);
     }
+    cos[n_fft / 4] = 0;
+    break :blk .{ .cos = cos, .sin = sin };
+};
 
-    /// |X[k]|^2 for k in 0..bins.
-    pub fn power(self: Dft, frame: *const [n_fft]f32, out: *[bins]f32) void {
-        var real: [n_fft]f64 = undefined;
-        var imag = [_]f64{0} ** n_fft;
-        for (frame, 0..) |sample, i| real[@bitReverse(@as(u9, @intCast(i)))] = sample;
-        var size: usize = 2;
-        while (size <= n_fft) : (size *= 2) {
-            const half = size / 2;
-            const stride = n_fft / size;
-            var start: usize = 0;
-            while (start < n_fft) : (start += size) {
-                for (0..half) |j| {
-                    const even = start + j;
-                    const odd = even + half;
-                    const c = self.cos[j * stride];
-                    const s = self.sin[j * stride];
-                    const re = c * real[odd] - s * imag[odd];
-                    const im = s * real[odd] + c * imag[odd];
-                    real[odd] = real[even] - re;
-                    imag[odd] = imag[even] - im;
-                    real[even] += re;
-                    imag[even] += im;
-                }
+/// |X[k]|^2 for k in 0..bins: the power spectrum of one real 512-sample frame.
+pub fn powerSpectrum(frame: *const [n_fft]f32, out: *[bins]f32) void {
+    var real: [n_fft]f64 = undefined;
+    var imag = [_]f64{0} ** n_fft;
+    for (frame, 0..) |sample, i| real[@bitReverse(@as(u9, @intCast(i)))] = sample;
+    var size: usize = 2;
+    while (size <= n_fft) : (size *= 2) {
+        const half = size / 2;
+        const stride = n_fft / size;
+        var start: usize = 0;
+        while (start < n_fft) : (start += size) {
+            for (0..half) |j| {
+                const even = start + j;
+                const odd = even + half;
+                const c = twiddles.cos[j * stride];
+                const s = twiddles.sin[j * stride];
+                const re = c * real[odd] - s * imag[odd];
+                const im = s * real[odd] + c * imag[odd];
+                real[odd] = real[even] - re;
+                imag[odd] = imag[even] - im;
+                real[even] += re;
+                imag[even] += im;
             }
         }
-        for (0..bins) |k| {
-            out[k] = @floatCast(real[k] * real[k] + imag[k] * imag[k]);
-        }
     }
-};
+    for (0..bins) |k| {
+        out[k] = @floatCast(real[k] * real[k] + imag[k] * imag[k]);
+    }
+}
 
 fn reflect(pos: isize, len: usize) usize {
     const n: isize = @intCast(len);
@@ -78,7 +73,7 @@ fn reflect(pos: isize, len: usize) usize {
 
 /// PhonMatchNet's 40-bin keyword log-mel: [ceil(len / 160)][40].
 /// `window` is [400], `mel` is [257][40], both from the PhonMatchNet weights.
-pub fn keywordMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, window: []const f32, mel: []const f32) ![]f32 {
+pub fn keywordMel(alloc: std.mem.Allocator, wave: []const f32, window: []const f32, mel: []const f32) ![]f32 {
     if (window.len != win_length or mel.len != bins * keyword_mels) return error.ShapeMismatch;
     if (wave.len <= n_fft / 2) return error.ClipTooShort; // reflect padding needs this
     const frames = (wave.len + hop_length - 1) / hop_length;
@@ -95,7 +90,7 @@ pub fn keywordMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, window:
             const pos = @as(isize, @intCast(t * hop_length + j)) - n_fft / 2;
             x.* = wave[reflect(pos, wave.len)] * window[j - offset];
         }
-        dft.power(&frame, &spectrum);
+        powerSpectrum(&frame, &spectrum);
         const V = @Vector(keyword_mels, f32);
         var sums: V = @splat(0);
         for (spectrum, 0..) |power, k| {
@@ -114,7 +109,7 @@ pub fn googleFrames(wave_len: usize) usize {
 
 /// Google speech_embedding's 32-bin log-mel: [googleFrames(len)][32].
 /// `window` is [400], `mel` is [257][32], both from the Google weights.
-pub fn googleLogMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, window: []const f32, mel: []const f32) ![]f32 {
+pub fn googleLogMel(alloc: std.mem.Allocator, wave: []const f32, window: []const f32, mel: []const f32) ![]f32 {
     if (window.len != win_length or mel.len != bins * google_mels) return error.ShapeMismatch;
     const frames = googleFrames(wave.len);
     const out = try alloc.alloc(f32, frames * google_mels);
@@ -125,7 +120,7 @@ pub fn googleLogMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, windo
             const pos = f * hop_length + j;
             x.* = if (j >= win_length or pos < google_left_pad) 0 else wave[pos - google_left_pad] * window[j];
         }
-        dft.power(&frame, &spectrum);
+        powerSpectrum(&frame, &spectrum);
         const V = @Vector(google_mels, f32);
         var sums: V = @splat(0);
         for (spectrum, 0..) |power, k| {
@@ -140,13 +135,10 @@ pub fn googleLogMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, windo
 
 const testing = std.testing;
 
-test "dft of a constant frame is all DC" {
-    const dft = try Dft.init(testing.allocator);
-    defer testing.allocator.free(dft.cos);
-    defer testing.allocator.free(dft.sin);
+test "power spectrum of a constant frame is all DC" {
     const frame = [_]f32{1} ** n_fft;
     var out: [bins]f32 = undefined;
-    dft.power(&frame, &out);
+    powerSpectrum(&frame, &out);
     try testing.expectApproxEqRel(@as(f32, n_fft * n_fft), out[0], 1e-5);
     try testing.expect(out[1] < 1e-3);
 }

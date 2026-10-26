@@ -104,7 +104,6 @@ pub const Model = struct {
     network: network_mod.Network,
     google: google_mod.Google,
     g2p: text_mod.G2p,
-    dft: features.Dft,
     thresholds: []const Threshold,
 
     /// Everything, including the weights, is allocated from `arena`; keep it
@@ -165,7 +164,6 @@ pub const Model = struct {
             .network = try network_mod.Network.init(arena, main.weights),
             .google = try google_mod.Google.init(arena, google.weights),
             .g2p = g2p_encoder,
-            .dft = try features.Dft.init(arena),
             .thresholds = thresholds.items,
         };
     }
@@ -192,9 +190,9 @@ pub const Model = struct {
             if (!std.math.isFinite(x) or @abs(x) > 1) return error.InvalidSamples;
         }
 
-        const mel = try self.network.keywordMel(scratch, self.dft, wave);
+        const mel = try self.network.keywordMel(scratch, wave);
         const t = mel.len / features.keyword_mels;
-        const emb = try self.google.embed(scratch, self.dft, wave);
+        const emb = try self.google.embed(scratch, wave);
         const logit = try self.network.forward(scratch, mel, t, emb.data, emb.rows, kw.data, kw.rows);
         if (!std.math.isFinite(logit)) return error.InvalidLogit;
 

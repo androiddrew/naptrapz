@@ -107,8 +107,8 @@ pub const Google = struct {
         }
     }
 
-    pub fn logMel(self: Google, arena: std.mem.Allocator, dft: features.Dft, wave: []const f32) ![]f32 {
-        return features.googleLogMel(arena, dft, wave, self.window, self.mel);
+    pub fn logMel(self: Google, arena: std.mem.Allocator, wave: []const f32) ![]f32 {
+        return features.googleLogMel(arena, wave, self.window, self.mel);
     }
 
     pub const Embeddings = struct {
@@ -171,8 +171,8 @@ pub const Google = struct {
         return height - 2;
     }
 
-    pub fn embed(self: Google, arena: std.mem.Allocator, dft: features.Dft, wave: []const f32) !Embeddings {
-        const log_mel = try self.logMel(arena, dft, wave);
+    pub fn embed(self: Google, arena: std.mem.Allocator, wave: []const f32) !Embeddings {
+        const log_mel = try self.logMel(arena, wave);
         const result = try self.encodeLogMel(arena, log_mel, features.googleFrames(wave.len));
         if (result.rows != wave.len / samples_per_embedding) return error.UnexpectedEmbeddingShape;
         return result;

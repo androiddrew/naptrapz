@@ -90,11 +90,11 @@ fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *s
     try checks.append(arena, try compare(fx, "text", kw.data, &.{ kw.rows, 256 }, 1e-4, .absolute));
 
     // 2. Keyword log-mel.
-    const mel = try model.network.keywordMel(arena, model.dft, wave);
+    const mel = try model.network.keywordMel(arena, wave);
     try checks.append(arena, try compare(fx, "keyword_mel", mel, &.{ mel.len / 40, 40 }, 1e-3, if (strict_frontends) .absolute else .power_log10));
 
     // 3. Google log-mel, then the conv stack on the reference log-mel.
-    const google_mel = try model.google.logMel(arena, model.dft, wave);
+    const google_mel = try model.google.logMel(arena, wave);
     try checks.append(arena, try compare(fx, "google_log_mel", google_mel, &.{ google_mel.len / 32, 32 }, 1e-3, if (strict_frontends) .absolute else .magnitude_log));
     const ref_google_mel = try fx.get("google_log_mel");
     const emb = try model.google.encodeLogMel(arena, ref_google_mel.data, ref_google_mel.shape[0]);

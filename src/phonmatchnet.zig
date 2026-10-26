@@ -84,8 +84,8 @@ pub const Network = struct {
         );
     }
 
-    pub fn keywordMel(self: Network, arena: std.mem.Allocator, dft: features.Dft, wave: []const f32) ![]f32 {
-        return features.keywordMel(arena, dft, wave, self.kw_window, self.kw_mel);
+    pub fn keywordMel(self: Network, arena: std.mem.Allocator, wave: []const f32) ![]f32 {
+        return features.keywordMel(arena, wave, self.kw_window, self.kw_mel);
     }
 
     /// mel [t][40], google [g][96], text [p][256] -> keyword logit.
