@@ -62,6 +62,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .pic = true,
+        .link_libc = true, // allocations use the host's malloc
         .imports = &.{ .{ .name = "naptrap", .module = lib }, .{ .name = "naptrap_bundled", .module = bundled } },
     });
     // On Windows the DLL's import library is naptrap.lib, so the static

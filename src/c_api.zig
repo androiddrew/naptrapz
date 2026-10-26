@@ -2,7 +2,8 @@
 const std = @import("std");
 const naptrap = @import("naptrap");
 const bundled = @import("naptrap_bundled");
-const allocator = std.heap.page_allocator;
+// Handles and buffers come from the host's malloc.
+const allocator = std.heap.c_allocator;
 
 const Status = enum(c_int) { ok = 0, invalid_argument, invalid_audio, invalid_keyword, unknown_far, model_error, out_of_memory, busy, internal_error };
 threadlocal var diagnostic: [256:0]u8 = @splat(0);
@@ -146,8 +147,8 @@ fn load(model_dir: [*:0]const u8, google_dir: [*:0]const u8, g2p_dir: [*:0]const
     const engine = try allocator.create(Engine);
     errdefer allocator.destroy(engine);
     engine.* = .{ .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
-    var io = std.Io.Threaded.init(allocator, .{});
-    defer io.deinit();
+    // Loading only reads files, so it needs neither threads nor an allocator.
+    var io: std.Io.Threaded = .init_single_threaded;
     engine.model = try naptrap.Model.load(io.io(), allocator, std.mem.span(model_dir), std.mem.span(google_dir), std.mem.span(g2p_dir));
     return engine;
 }
