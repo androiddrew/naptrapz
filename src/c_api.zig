@@ -21,7 +21,7 @@ fn fail(err: anyerror, fallback: Status) c_int {
         error.OutOfMemory => .out_of_memory,
         error.InvalidArgument, error.InvalidStreamConfig, error.SampleCounterOverflow => .invalid_argument,
         error.InvalidSamples, error.ClipLengthOutOfRange, error.InvalidSampleRate => .invalid_audio,
-        error.InvalidUtf8, error.SpellOutNumbers, error.NoLetters, error.NoPhoneticFeatures, error.FeatureLengthOutOfRange, error.InvalidFeatures => .invalid_keyword,
+        error.InvalidUtf8, error.KeywordTooLong, error.SpellOutNumbers, error.NoLetters, error.NoPhoneticFeatures, error.FeatureLengthOutOfRange, error.InvalidFeatures => .invalid_keyword,
         error.UnknownOperatingPoint => .unknown_far,
         error.Busy => .busy,
         else => fallback,

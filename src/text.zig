@@ -18,6 +18,12 @@ const phoneme_start = 2;
 const phoneme_end = 3;
 const max_decode_steps = 20;
 
+/// The matcher accepts at most this many keyword feature rows.
+pub const max_rows = 128;
+/// Longer keyword strings are rejected before normalization. No accepted
+/// keyword comes close: 128 rows is roughly twenty words.
+pub const max_keyword_bytes = 1024;
+
 // ---------------------------------------------------------------------------
 // Normalization
 //
@@ -63,7 +69,9 @@ fn isLetter(c: u8) bool {
 }
 
 /// Lowercased words joined by single spaces, e.g. "Héllo, WORLD’s" -> "hello world's".
+/// Input longer than `max_keyword_bytes` returns error.KeywordTooLong.
 pub fn normalize(arena: std.mem.Allocator, keyword: []const u8) ![]const u8 {
+    if (keyword.len > max_keyword_bytes) return error.KeywordTooLong;
     const view = std.unicode.Utf8View.init(keyword) catch return error.InvalidUtf8;
     var folded: std.ArrayList(u8) = .empty;
     var it = view.iterator();
@@ -147,40 +155,52 @@ pub const G2p = struct {
         rows: usize,
     };
 
+    /// Normalize `keyword` and compute its decoder-state rows. Encoding stops
+    /// with error.FeatureLengthOutOfRange as soon as it exceeds `max_rows`.
     pub fn encode(self: G2p, arena: std.mem.Allocator, keyword: []const u8) !Features {
         const normalized = try normalize(arena, keyword);
         var rows: std.ArrayList(f32) = .empty;
+        const work: Work = .{
+            .h = try arena.alloc(f32, self.size),
+            .scratch = try arena.alloc(f32, 6 * self.size),
+            .logits = try arena.alloc(f32, self.phonemes),
+        };
         var words = std.mem.tokenizeScalar(u8, normalized, ' ');
         var first = true;
         while (words.next()) |w| {
-            if (!first) try rows.appendSlice(arena, self.dec_emb[0..self.size]);
+            if (!first) try self.appendRow(arena, &rows, self.dec_emb[0..self.size]);
             first = false;
-            try self.encodeWord(arena, w, &rows);
+            try self.encodeWord(arena, w, &rows, work);
         }
         if (rows.items.len == 0) return error.NoPhoneticFeatures;
         return .{ .text = normalized, .data = rows.items, .rows = rows.items.len / self.size };
     }
 
-    fn encodeWord(self: G2p, arena: std.mem.Allocator, w: []const u8, rows: *std.ArrayList(f32)) !void {
+    const Work = struct { h: []f32, scratch: []f32, logits: []f32 };
+
+    fn appendRow(self: G2p, arena: std.mem.Allocator, rows: *std.ArrayList(f32), row: []const f32) !void {
+        if (rows.items.len / self.size >= max_rows) return error.FeatureLengthOutOfRange;
+        try rows.appendSlice(arena, row);
+    }
+
+    fn encodeWord(self: G2p, arena: std.mem.Allocator, w: []const u8, rows: *std.ArrayList(f32), work: Work) !void {
         const size = self.size;
-        const h = try arena.alloc(f32, size);
+        const h = work.h;
         @memset(h, 0);
-        const scratch = try arena.alloc(f32, 6 * size);
-        const logits = try arena.alloc(f32, self.phonemes);
 
         for (w) |c| {
             const index: usize = if (isLetter(c)) 3 + @as(usize, c - 'a') else 1; // apostrophe -> <unk>
-            self.encoder.step(self.enc_emb[index * size ..][0..size], h, scratch);
+            self.encoder.step(self.enc_emb[index * size ..][0..size], h, work.scratch);
         }
-        self.encoder.step(self.enc_emb[grapheme_end * size ..][0..size], h, scratch);
+        self.encoder.step(self.enc_emb[grapheme_end * size ..][0..size], h, work.scratch);
 
         var token: usize = phoneme_start;
         for (0..max_decode_steps) |_| {
-            self.decoder.step(self.dec_emb[token * size ..][0..size], h, scratch);
-            ops.linear(logits, h, 1, self.fc_w, self.fc_b, size, self.phonemes);
-            token = ops.argmax(logits);
+            self.decoder.step(self.dec_emb[token * size ..][0..size], h, work.scratch);
+            ops.linear(work.logits, h, 1, self.fc_w, self.fc_b, size, self.phonemes);
+            token = ops.argmax(work.logits);
             if (token == phoneme_end) break;
-            try rows.appendSlice(arena, h);
+            try self.appendRow(arena, rows, h);
         }
     }
 };
@@ -198,4 +218,5 @@ test "normalize matches the Python policy" {
     try testing.expectEqualStrings("a b", try normalize(arena, "a' b"));
     try testing.expectError(error.SpellOutNumbers, normalize(arena, "route 66"));
     try testing.expectError(error.NoLetters, normalize(arena, "!!! ß"));
+    try testing.expectError(error.KeywordTooLong, normalize(arena, "a" ** (max_keyword_bytes + 1)));
 }

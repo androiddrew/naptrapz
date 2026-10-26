@@ -19,6 +19,7 @@ const features = @import("features.zig");
 const d = 128;
 const bn_eps = 1e-5;
 const leaky_slope = 0.01;
+const max_text_rows = @import("text.zig").max_rows;
 
 pub const Network = struct {
     kw_window: []const f32,
@@ -90,7 +91,7 @@ pub const Network = struct {
     /// mel [t][40], google [g][96], text [p][256] -> keyword logit.
     pub fn forward(self: Network, arena: std.mem.Allocator, mel: []const f32, t: usize, google: []const f32, g: usize, text: []const f32, p: usize) !f32 {
         // Same input checks as naptrap's predict().
-        if (t < 50 or t > 200 or g < 6 or g > 25 or p < 1 or p > 128) return error.FeatureLengthOutOfRange;
+        if (t < 50 or t > 200 or g < 6 or g > 25 or p < 1 or p > max_text_rows) return error.FeatureLengthOutOfRange;
         if (t < 8 * g or t > 8 * g + 8) return error.FeatureLengthMismatch;
         std.debug.assert(mel.len == t * 40 and google.len == g * 96 and text.len == p * 256);
 
@@ -132,7 +133,7 @@ pub const Network = struct {
         const scale: f32 = 1.0 / @sqrt(@as(f32, d));
         // Attention rows are independent. Project each row and advance the GRU
         // immediately instead of retaining two complete [s,128] intermediates.
-        var weights_buffer: [228]f32 = undefined; // ceil(200/2) audio + 128 text
+        var weights_buffer: [ops.conv1dLen(200, 3, 2, 1) + max_text_rows]f32 = undefined;
         const weights = weights_buffer[0..s];
         var q: [d]f32 = undefined;
         var row: [d]f32 = undefined;

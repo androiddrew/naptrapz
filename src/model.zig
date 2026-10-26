@@ -25,7 +25,7 @@ pub const Threshold = struct {
 pub const Keyword = text_mod.G2p.Features;
 
 pub fn validateKeyword(keyword: Keyword) !void {
-    if (keyword.rows < 1 or keyword.rows > 128) return error.FeatureLengthOutOfRange;
+    if (keyword.rows < 1 or keyword.rows > text_mod.max_rows) return error.FeatureLengthOutOfRange;
     if (keyword.data.len != keyword.rows * 256) return error.ShapeMismatch;
     for (keyword.data) |value| if (!std.math.isFinite(value)) return error.InvalidFeatures;
 }

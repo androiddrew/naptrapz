@@ -79,6 +79,8 @@ naptrap_status naptrap_model_load(const char *model_dir, const char *google_dir,
                                  const char *g2p_dir, naptrap_model **out);
 naptrap_status naptrap_model_release(naptrap_model *model);
 naptrap_status naptrap_model_threshold(naptrap_model *model, double far, double *out);
+/* utf8 need not be NUL-terminated. Keywords longer than 1024 bytes, or that
+ * produce more than 128 feature rows, fail with NAPTRAP_INVALID_KEYWORD. */
 naptrap_status naptrap_keyword_create(naptrap_model *model, const char *utf8,
                                      size_t length, naptrap_keyword **out);
 /* Borrowed NUL-terminated normalized text, valid until keyword release. */
