@@ -3,59 +3,90 @@
 A Zig 0.16 inference runtime for [naptrap](https://github.com/androiddrew/naptrap)'s
 PhonMatchNet text-defined wake word model. It has no dependencies beyond the Zig
 standard library, does fp32 batch-1 CPU inference, and reads the same three
-Hugging Face artifact directories as the Python package. The audio frontends use
-f64 FFT butterflies to reduce cancellation error, then return f32 features.
+Hugging Face artifact directories as the Python package. It ships as a Zig
+package, a command-line tool and a C library.
 
-Tested on Linux/x86_64 with Zig **0.16.0**, Python **3.12.11** and PyTorch
-**2.14.1+cpu**, using the released `v1` artifacts. The validation corpus includes
-25 speech clips, five keywords and both calibrated operating points: all 250
-decisions match Python, with maximum score difference below `2e-6` in ReleaseFast.
-
-## Layout
-
-| File | What it does |
-| --- | --- |
-| `src/safetensors.zig` | Parses safetensors (F32/F64/F16/BF16 → f32; integer tensors skipped) |
-| `src/ops.zig` | Kernels: `@Vector` dot, Linear, Conv1d/2d, ConvTranspose1d, MaxPool, BatchNorm-as-affine, GRU step, softmax |
-| `src/features.zig` | 512-point radix-2 FFT, the 40-bin keyword log-mel (`torch.stft` semantics) and Google's 32-bin log-mel (TF framing) |
-| `src/google.zig` | Google `speech_embedding` conv stack → `[len/1280, 96]` |
-| `src/text.zig` | Keyword normalization and the g2p_en decoder states → `[P, 256]` |
-| `src/unicode_data.zig` | Generated Unicode 15.0.0 normalization data; no runtime Unicode dependency |
-| `src/phonmatchnet.zig` | The matcher: conv audio branch, Google upsampling, causal attention, GRU, logit |
-| `src/model.zig` | Verifies artifact formats, SHA-256, encoder pins, Google provenance and G2P dimensions; `keyword()` and `detect()` |
-| `src/wav.zig` | Mono 16 kHz 16-bit PCM WAV reader |
-| `src/main.zig` | CLI with the same JSON output and exit codes as `naptrap detect` |
-| `src/stream.zig` | Chunk-independent sliding windows, sample timestamps and debounced wake events |
-| `src/c_api.zig`, `include/naptrap.h` | Versioned native ABI with reference-counted model, keyword and stream handles |
-| `src/unbundled.zig`, build-generated `naptrap_bundled` | Optional model/config embedding, with the same validation as disk loading |
-| `src/parity.zig` | Compares each stage against PyTorch fixtures |
-| `tools/dump_fixtures.py` | Writes those fixtures from the Python model |
-| `tools/generate_unicode.py` | Rebuilds/checks the versioned Unicode source table with Python 3.12 |
+Requires Zig **0.16.0** or newer. Validated on Linux/x86_64 against Python
+**3.12.11** and PyTorch **2.14.1+cpu** with the released `v1` artifacts: on a
+corpus of 25 speech clips, five keywords and both calibrated operating points
+(maintained outside this package), all 250 decisions match Python, with maximum
+score difference below `2e-6` in ReleaseFast.
 
 ## Get the models
 
-Commands below run from the source directory and put model files, fixtures and
-build outputs in the sibling `../work/` directory.
-
 ```sh
-hf download androiddrew/naptrap-phonmatchnet-en       --revision v1 --local-dir ../work/models/phonmatchnet
-hf download androiddrew/google-speech-embedding-pytorch --revision v1 --local-dir ../work/models/google
-hf download androiddrew/g2p-en-decoder-pytorch        --revision v1 --local-dir ../work/models/g2p
+hf download androiddrew/naptrap-phonmatchnet-en       --revision v1 --local-dir models/phonmatchnet
+hf download androiddrew/google-speech-embedding-pytorch --revision v1 --local-dir models/google
+hf download androiddrew/g2p-en-decoder-pytorch        --revision v1 --local-dir models/g2p
 ```
+
+`models/` is the default model directory of the CLI and is ignored by git.
 
 ## Build and run
 
 ```sh
-zig build test --cache-dir ../work/zig-cache --global-cache-dir ../work/zig-global-cache
-zig build -Doptimize=ReleaseFast --prefix ../work \
-    --cache-dir ../work/zig-cache --global-cache-dir ../work/zig-global-cache
-../work/bin/naptrap detect clip.wav "hey computer" --models ../work/models
+zig build -Doptimize=ReleaseFast
+zig-out/bin/naptrap detect clip.wav "hey computer"
 ```
 
-The CLI accepts mono, 16 kHz, 16-bit PCM WAVs of 0.5–2 seconds. It prints JSON
+`detect` accepts mono, 16 kHz, 16-bit PCM WAVs of 0.5–2 seconds. It prints JSON
 and exits with **0** for an accepted keyword, **1** for rejection, or **2** for an
-input/model error. `--far` must exactly select a calibrated operating point;
-the released model provides `0.01` (default) and `0.1`.
+input/model error (usage errors go to stderr). `--far` must exactly select a
+calibrated operating point; the released model provides `0.01` (default) and
+`0.1`. `--models DIR` points at a directory holding `phonmatchnet/`, `google/`
+and `g2p/`; `--model-dir`, `--google-dir` and `--g2p-dir` set them separately.
+
+Keywords are normalized like the Python package (see
+[Implementation details](#implementation-details)), may be at most 1024 bytes,
+and may produce at most 128 feature rows (roughly twenty words).
+
+## Using naptrap from Zig
+
+```sh
+zig fetch --save "git+<repository URL>#v0.1.0"
+```
+
+```zig
+// build.zig
+const naptrap = b.dependency("naptrap_zig", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("naptrap", naptrap.module("naptrap"));
+```
+
+```zig
+const naptrap = @import("naptrap");
+
+var model = try naptrap.Model.load(io, gpa, "models/phonmatchnet", "models/google", "models/g2p");
+defer model.deinit();
+const keyword = try model.keyword(gpa, "hey computer");
+defer keyword.deinit(gpa);
+
+var scratch: std.heap.ArenaAllocator = .init(gpa);
+defer scratch.deinit();
+const prediction = try model.detect(scratch.allocator(), samples, keyword, 0.01);
+if (prediction.accepted) std.debug.print("wake ({d:.3})\n", .{prediction.score});
+```
+
+`Model` and `Keyword` own their memory and are released with `deinit`.
+`detect` takes a *scratch* allocator whose buffers it never frees individually:
+pass an arena (or a `FixedBufferAllocator`) and reset it between calls with
+`.retain_capacity`. A loaded `Model` is immutable, so `keyword`, `threshold`
+and `detect` can run on several threads at once, each `detect` with its own
+scratch allocator. Errors are explicit sets such as `naptrap.model.DetectError`.
+
+`Model`, `Keyword`, `Prediction`, `Stream` and the `model`, `stream`, `text`
+and `wav` modules are the supported API. `features`, `google`, `phonmatchnet`,
+`ops` and `safetensors` expose individual pipeline stages for parity work and
+may change in any release. `zig build docs` installs the API documentation to
+`zig-out/docs`.
+
+Load diagnostics are logged through `std.log` under the `.naptrap` and
+`.safetensors` scopes; filter them with `std_options.log_scope_levels`.
+
+To embed models in a Zig program, pass `.@"embed-models" = path` to
+`b.dependency` and import the `naptrap_bundled` module (see
+[Self-contained embedded-model builds](#self-contained-embedded-model-builds)).
+A relative path is resolved against the naptrap package's own directory, so
+pass an absolute path, for example from `b.path("models").getPath(b)`.
 
 ## Streaming listener
 
@@ -64,10 +95,9 @@ the released model provides `0.01` (default) and `0.1`.
 debounced wake event. For example, from a Linux microphone or an existing file:
 
 ```sh
-arecord -q -t raw -f S16_LE -r 16000 -c 1 | \
-    ../work/bin/naptrap listen "hey computer" --models ../work/models
+arecord -q -t raw -f S16_LE -r 16000 -c 1 | zig-out/bin/naptrap listen "hey computer"
 ffmpeg -v error -i recording.wav -f s16le -ac 1 -ar 16000 - | \
-    ../work/bin/naptrap listen "hey computer" --models ../work/models --all-windows
+    zig-out/bin/naptrap listen "hey computer" --all-windows
 ```
 
 | Option | Default | Meaning |
@@ -89,33 +119,38 @@ produces only one wake until rejected windows rearm the detector. A successful
 EOF exits 0, even without wakes; errors exit 2. Partial final windows are not
 padded. An odd trailing PCM byte is an error. Output is flushed per event.
 
-Zig applications can use `naptrap.Stream.init(allocator, &model, keyword, config)`
+Zig applications can use `naptrap.Stream.init(gpa, &model, keyword, config)`
 and `stream.push(samples, context, callback)` with arbitrary float32 chunks in
 `[-1, 1]`. The synchronous callback receives every complete window and its
-`triggered` flag. The model and keyword are borrowed and must outlive the stream.
-Serialize calls; callbacks must not reenter it. `reset()` clears audio history,
-timestamps and debounce state while retaining scratch capacity. Invalid sample
-chunks leave state unchanged; reset after other push/callback failures. Call
-`deinit()` when finished. Feed already resampled 16 kHz audio: capture/resampling
-and VAD/STT/TTS remain the host application's responsibilities. Repeated-window
-false-alarm rates need evaluation separately from the per-clip FAR calibration.
+`triggered` flag; it may return `void` or an error union, and its errors are
+passed through `push`. The model and keyword are borrowed and must outlive the
+stream. Serialize calls; callbacks must not reenter it. `reset()` clears audio
+history, timestamps and debounce state while retaining scratch capacity. Invalid
+sample chunks leave state unchanged; reset after other push/callback failures.
+Call `deinit()` when finished. Feed already resampled 16 kHz audio:
+capture/resampling and VAD/STT/TTS remain the host application's
+responsibilities. Repeated-window false-alarm rates need evaluation separately
+from the per-clip FAR calibration.
 
 ## Embedding through the C ABI
 
 The normal build also installs `lib/libnaptrap.so` and `lib/libnaptrap.a` (on macOS
 `libnaptrap.dylib`; on Windows `bin/naptrap.dll` with import library
 `lib/naptrap.lib` and static library `lib/naptrap_static.lib`; on wasm only the
-static library), plus `include/naptrap.h`. ABI version **1** uses
-opaque handles, fixed-width result fields, explicit status codes and thread-local
-error messages. The library never writes to stdout or stderr; diagnostics that
-the Zig code logs are appended to `naptrap_last_error()`. The static archive is position-independent and includes Zig's
-compiler runtime, so a normal C compiler can link it into a PIE executable.
+static library), plus `include/naptrap.h`. ABI version **1** uses opaque handles,
+fixed-width result fields, explicit status codes and thread-local error
+messages. The shared library's soname major version tracks the ABI version
+(`libnaptrap.so.1`). The library allocates with the host's `malloc` and never
+writes to stdout or stderr; diagnostics are appended to `naptrap_last_error()`.
+The static archive is position-independent and includes Zig's compiler runtime,
+so a normal C compiler can link it into a PIE executable. Use a release build
+(`-Doptimize=ReleaseFast` or `ReleaseSafe`) for libraries you distribute.
 
 ```sh
 # Shared library (set an appropriate runtime search path for your installation):
-cc app.c -I ../work/include -L ../work/lib -lnaptrap -o ../work/app
+cc app.c -I zig-out/include -L zig-out/lib -lnaptrap -o app
 # Static library:
-cc app.c -I ../work/include ../work/lib/libnaptrap.a -o ../work/app
+cc app.c -I zig-out/include zig-out/lib/libnaptrap.a -o app
 ```
 
 Typical C use, with application-owned mono 16 kHz float samples:
@@ -149,13 +184,13 @@ also selects defaults. `naptrap_stream_reset` starts a fresh audio timeline.
 
 A keyword retains its model and a stream retains its keyword; you may release
 parent references while dependent handles are alive. Release each returned
-reference exactly once. NULL release calls succeed. Serialize operations on
-handles sharing a model; separate models can run concurrently. Reentrant/busy
-operations fail with `NAPTRAP_BUSY`, including releases attempted from callbacks.
-Do not retain callback event pointers: copy the event instead. The full contracts
-and error codes are in `include/naptrap.h`. Python `ctypes`, Rust FFI and Swift's C
-interoperability can use this same interface; Python and native C consumers are
-included in the external validation suite.
+reference exactly once. NULL release calls succeed. Calls on handles sharing a
+model are serialized: overlapping or reentrant calls, including releases
+attempted from callbacks, fail with `NAPTRAP_BUSY`. Separate models run
+concurrently, so load one model per thread for parallel detection. Do not retain
+callback event pointers: copy the event instead. The full contracts and error
+codes are in `include/naptrap.h`; `tests/abi_smoke.c` exercises them. Python
+`ctypes`, Rust FFI and Swift's C interoperability can use this same interface.
 
 ## Self-contained embedded-model builds
 
@@ -165,22 +200,20 @@ and `g2p/`. Absolute paths work; relative paths are resolved from the source
 directory containing `build.zig`.
 
 ```sh
-zig build -Doptimize=ReleaseFast -Dembed-models=../work/models \
-    --prefix ../work/embedded --cache-dir ../work/zig-cache \
-    --global-cache-dir ../work/zig-global-cache
+zig build -Doptimize=ReleaseFast -Dembed-models=models --prefix embedded
 
 # No model directory needed at runtime:
-../work/embedded/bin/naptrap detect clip.wav "hey computer"
-arecord -q -t raw -f S16_LE -r 16000 -c 1 | \
-    ../work/embedded/bin/naptrap listen "hey computer"
-../work/embedded/bin/naptrap-parity ../work/fixtures/hey_computer.safetensors --embedded
+embedded/bin/naptrap detect clip.wav "hey computer"
+arecord -q -t raw -f S16_LE -r 16000 -c 1 | embedded/bin/naptrap listen "hey computer"
 ```
 
 The tested Linux CLI is statically linked and about 10.8 MB, so distribution can
-consist of that executable alone for a compatible target. Generated embedding
+consist of that executable alone for a compatible target. Embedded builds
+contain the model weights, so distribute them with the model repositories'
+license and NOTICE files (see `THIRD_PARTY_NOTICES.md`). Generated embedding
 sources and copied model inputs live in the Zig build cache, never in `src/`.
-Changing weights/configs requires rebuilding. The generated assets are tracked
-build inputs, and the normal build without this option contains no weights.
+Changing weights/configs requires rebuilding, and the normal build without this
+option contains no weights.
 
 Bundled CLI builds select their embedded models by default. Explicit `--models`,
 `--model-dir`, `--google-dir` or `--g2p-dir` selects filesystem loading instead;
@@ -200,21 +233,34 @@ accepts caller-provided `{config, weights}` byte slices and copies all retained
 model data, so the inputs can be freed afterwards. Release either kind of model
 with `model.deinit()`.
 
-Zig consumers see load diagnostics through `std.log` under the `.naptrap` and
-`.safetensors` scopes; filter them with `std_options.log_scope_levels`.
-
 Embedded and filesystem loaders share format, SHA-256, encoder-pin, provenance,
 dimension and threshold validation. Embedding does not bypass these checks.
 
-## Parity workflow
+## Testing
 
 ```sh
-python3.12 -m venv ../work/venv
-../work/venv/bin/pip install "naptrap[hub]"
-../work/venv/bin/python tools/dump_fixtures.py --models ../work/models \
-    --out ../work/fixtures/hey_computer.safetensors \
+zig build test                        # unit tests and the C ABI smoke test
+zig build test -Dtest-models=models   # plus end-to-end tests against the v1 models
+zig build check -Dtarget=arm-linux-musleabihf   # compile everything for a target
+```
+
+The end-to-end tests cover loading, keyword limits, input validation, stream
+chunk independence and callbacks, and the C ABI with real models. CI runs them
+on Linux, macOS and Windows and compiles for 32-bit and other cross targets.
+
+## Parity workflow
+
+`naptrap-parity` compares every stage with tensors dumped from the PyTorch
+reference. It is a developer tool, installed only with `-Dinstall-parity`:
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/pip install "naptrap[hub]"
+.venv/bin/python tools/dump_fixtures.py --models models \
+    --out fixtures/hey_computer.safetensors \
     --keyword "hey computer"            # optionally --wav clip.wav
-../work/bin/naptrap-parity ../work/fixtures/hey_computer.safetensors --models ../work/models
+zig build -Doptimize=ReleaseFast -Dinstall-parity
+zig-out/bin/naptrap-parity fixtures/hey_computer.safetensors --models models
 ```
 
 Output reports each stage (`text`, `keyword_mel`, `google_log_mel`, `google`,
@@ -273,45 +319,55 @@ python3.12 tools/generate_unicode.py --out src/unicode_data.zig --check
 # Omit --check to regenerate the checked-in source.
 ```
 
-## Performance and reuse
+## Performance and memory
 
 The convolution kernel packs eight spatial positions at a time and uses SIMD
 across them, preserving the per-output accumulation order. Mel projections also
-use SIMD. The Google encoder alternates between two caller-owned feature buffers
-and reuses its convolution patch storage. The matcher feeds attention rows
-directly into its GRU instead of retaining full attention/output sequences.
-No BLAS, FFT or Unicode library is required at runtime.
+use SIMD. The audio frontends use f64 FFT butterflies to reduce cancellation
+error, then return f32 features. The Google encoder alternates between two
+feature buffers and reuses its convolution patch storage. The matcher feeds
+attention rows directly into its GRU instead of retaining full attention/output
+sequences. No BLAS, FFT or Unicode library is required at runtime.
 
-On the validation Linux/x86_64 host, a warm 1.5-second inference averaged about
-**22 ms**, down from **251 ms**, over 30 iterations with a reused model and scratch
-arena. Model loading took about 11 ms and encoding `hey computer` about 1 ms.
-These are host-specific measurements, not a latency guarantee. The CLI's median
-end-to-end time over the speech corpus was about 38 ms, including model loading.
+On a Linux/x86_64 development host in ReleaseFast, a warm 1.5-second detection
+takes about **22 ms** with a reused model and scratch arena, model loading about
+10 ms and encoding `hey computer` about 1 ms. These are host-specific
+measurements, not a latency guarantee. A loaded model holds about **9 MiB**
+(its decoded weights; `Model.load` frees the raw file contents before
+returning). `detect` needs about **2.2 MiB** of scratch for a 1.5-second clip
+and **2.7 MiB** for a 2-second clip, and a reused arena stays at that capacity.
+These figures exclude keyword storage and a stream's ring/window buffers.
+Keywords must outlive the detections and streams that use them.
 
-For repeated detection, keep the `Model` loaded, compute `keyword()` once, and
-pass a scratch arena to `detect()`. `detect()` never frees its per-call buffers
-individually, so `scratch` must be an arena (or a `FixedBufferAllocator`); reset
-it with `.retain_capacity` between clips. The measured scratch capacity for a
-1.5-second clip is about **2.16 MiB**, down from 8.1 MiB (a 73% reduction). A
-2-second clip used about **2.68 MiB**; alternating supported clip lengths stayed
-at that capacity over 40 calls after warm-up. These figures exclude model and
-keyword storage and the stream's ring/window buffers. `Model.load` frees the raw
-file contents before returning, so a loaded model holds only its decoded weights.
-Keywords own their memory (`kw.deinit(gpa)`) and must outlive the detections and
-streams that use them.
+## Supported targets
 
-The remaining matcher averaged about 4.68 ms in a 50-iteration profile: 2.77 ms
-in the two audio convolutions/normalizations, 0.29 ms in Google upsampling, and
-approximately 1.62 ms in projections, attention, GRU and other work. Audio Conv1d
-is the next measured compute optimization target; this memory change keeps
-inference around 22 ms and preserves numerical parity.
+The library has no OS dependencies beyond file reading in `Model.load` (use
+`Model.fromBytes` or embedded models where there is no file system). CI tests
+x86_64 Linux, macOS and Windows, runs the end-to-end tests on i386 Linux, and
+compiles for armv7, aarch64 and riscv64 Linux and wasm32-wasi.
 
-## Completed integration milestones
+## Layout
 
-- Streaming listener and reusable detector: implemented (see above).
-- Bounded intermediate feature storage and matcher profiling: implemented (see above).
-- C ABI for model, keyword, detection and streaming handles: implemented (see above).
-- Optional embedded weights/configs in the CLI and native libraries: implemented (see above).
+| File | What it does |
+| --- | --- |
+| `src/root.zig` | Package root and API overview |
+| `src/model.zig` | Verifies artifact formats, SHA-256, encoder pins, Google provenance and G2P dimensions; `keyword()` and `detect()` |
+| `src/stream.zig` | Chunk-independent sliding windows, sample timestamps and debounced wake events |
+| `src/text.zig` | Keyword normalization and the g2p_en decoder states → `[P, 256]` |
+| `src/unicode_data.zig` | Generated Unicode 15.0.0 normalization data; no runtime Unicode dependency |
+| `src/features.zig` | 512-point radix-2 FFT, the 40-bin keyword log-mel (`torch.stft` semantics) and Google's 32-bin log-mel (TF framing) |
+| `src/google.zig` | Google `speech_embedding` conv stack → `[len/1280, 96]` |
+| `src/phonmatchnet.zig` | The matcher: conv audio branch, Google upsampling, causal attention, GRU, logit |
+| `src/ops.zig` | Kernels: `@Vector` dot, Linear, Conv1d/2d, ConvTranspose1d, MaxPool, BatchNorm-as-affine, GRU step, softmax |
+| `src/safetensors.zig` | Parses safetensors (F32/F64/F16/BF16 → f32; integer tensors skipped) |
+| `src/wav.zig` | Mono 16 kHz 16-bit PCM WAV reader |
+| `src/main.zig` | CLI with the same JSON output and exit codes as `naptrap detect` |
+| `src/c_api.zig`, `include/naptrap.h` | Versioned native ABI with reference-counted model, keyword and stream handles |
+| `src/unbundled.zig`, build-generated `naptrap_bundled` | Optional model/config embedding, with the same validation as disk loading |
+| `src/parity.zig` | Compares each stage against PyTorch fixtures |
+| `tests/` | End-to-end model tests and the C ABI smoke test |
+| `tools/dump_fixtures.py` | Writes parity fixtures from the Python model |
+| `tools/generate_unicode.py` | Rebuilds/checks the versioned Unicode source table with Python 3.12 |
 
 ## License
 

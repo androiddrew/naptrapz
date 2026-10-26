@@ -1,4 +1,4 @@
-//! naptrap-parity <fixtures.safetensors> [--models DIR]
+//! naptrap-parity <fixtures.safetensors> [--models DIR | --embedded] [--strict-frontends]
 //!
 //! Runs each stage on the fixture's clip and keyword and compares it with the
 //! tensors tools/dump_fixtures.py saved from the PyTorch reference. Stages
