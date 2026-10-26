@@ -90,7 +90,8 @@ naptrap_status naptrap_keyword_create(naptrap_model *model, const char *utf8,
 const char *naptrap_keyword_text(const naptrap_keyword *keyword);
 naptrap_status naptrap_keyword_release(naptrap_keyword *keyword);
 
-/* Audio: 8000-32000 finite mono float32 samples in [-1,1], sample_rate=16000.
+/* Audio: 8000-32000 finite mono float32 samples in [-1,1], sample_rate=16000;
+ * otherwise NAPTRAP_INVALID_AUDIO (NULL samples: NAPTRAP_INVALID_ARGUMENT).
  * No resampling or clipping is performed. Output is zeroed on failure.
  * Keyword must belong to the supplied model. */
 naptrap_status naptrap_detect(naptrap_model *model, const naptrap_keyword *keyword,

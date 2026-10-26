@@ -253,8 +253,8 @@ export fn naptrap_detect(model: ?*Engine, keyword: ?*const Keyword, samples: ?[*
     const engine = model orelse return fail(error.InvalidArgument, .invalid_argument);
     const kw = keyword orelse return fail(error.InvalidArgument, .invalid_argument);
     if (kw.engine != engine) return fail(error.InvalidArgument, .invalid_argument);
-    if (sample_rate != 16000) return fail(error.InvalidSampleRate, .invalid_audio);
-    if (samples == null or count < 8000 or count > 32000) return fail(error.ClipLengthOutOfRange, .invalid_audio);
+    if (samples == null) return fail(error.InvalidArgument, .invalid_argument);
+    if (sample_rate != naptrap.features.sample_rate) return fail(error.InvalidSampleRate, .invalid_audio);
     engine.enter() catch |err| return fail(err, .busy);
     defer engine.leave();
     _ = engine.scratch.reset(.retain_capacity);
@@ -264,7 +264,15 @@ export fn naptrap_detect(model: ?*Engine, keyword: ?*const Keyword, samples: ?[*
 }
 
 export fn naptrap_stream_config_default(out: ?*StreamConfig) void {
-    if (out) |config| config.* = .{ .window_samples = 24000, .hop_samples = 4000, .trigger_windows = 2, .release_windows = 2, .cooldown_samples = 16000, .far = 0.01 };
+    const defaults: naptrap.stream.Config = .{};
+    if (out) |config| config.* = .{
+        .window_samples = defaults.window_samples,
+        .hop_samples = defaults.hop_samples,
+        .trigger_windows = defaults.trigger_windows,
+        .release_windows = defaults.release_windows,
+        .cooldown_samples = defaults.cooldown_samples,
+        .far = defaults.far,
+    };
 }
 
 fn createStream(keyword: *Keyword, config: naptrap.stream.Config) naptrap.stream.InitError!*Stream {
@@ -297,7 +305,7 @@ const EmitContext = struct {
 export fn naptrap_stream_push(stream: ?*Stream, samples: ?[*]const f32, count: usize, sample_rate: u32, callback: ?Callback, context: ?*anyopaque) c_int {
     const value = stream orelse return fail(error.InvalidArgument, .invalid_argument);
     const emit = callback orelse return fail(error.InvalidArgument, .invalid_argument);
-    if (sample_rate != 16000) return fail(error.InvalidSampleRate, .invalid_audio);
+    if (sample_rate != naptrap.features.sample_rate) return fail(error.InvalidSampleRate, .invalid_audio);
     if (samples == null and count != 0) return fail(error.InvalidArgument, .invalid_argument);
     value.keyword.engine.enter() catch |err| return fail(err, .busy);
     defer value.keyword.engine.leave();
