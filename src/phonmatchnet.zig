@@ -93,7 +93,7 @@ pub const Network = struct {
         // Same input checks as naptrap's predict().
         if (t < 50 or t > 200 or g < 6 or g > 25 or p < 1 or p > max_text_rows) return error.FeatureLengthOutOfRange;
         if (t < 8 * g or t > 8 * g + 8) return error.FeatureLengthMismatch;
-        std.debug.assert(mel.len == t * 40 and google.len == g * 96 and text.len == p * 256);
+        if (mel.len != t * 40 or google.len != g * 96 or text.len != p * 256) return error.ShapeMismatch;
 
         // Audio branch: [40][t] -> [128][t1]
         const mel_ct = try ops.transpose(arena, mel, t, 40);

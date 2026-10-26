@@ -79,7 +79,7 @@ fn reflect(pos: isize, len: usize) usize {
 /// PhonMatchNet's 40-bin keyword log-mel: [ceil(len / 160)][40].
 /// `window` is [400], `mel` is [257][40], both from the PhonMatchNet weights.
 pub fn keywordMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, window: []const f32, mel: []const f32) ![]f32 {
-    std.debug.assert(window.len == win_length and mel.len == bins * keyword_mels);
+    if (window.len != win_length or mel.len != bins * keyword_mels) return error.ShapeMismatch;
     if (wave.len <= n_fft / 2) return error.ClipTooShort; // reflect padding needs this
     const frames = (wave.len + hop_length - 1) / hop_length;
     const out = try alloc.alloc(f32, frames * keyword_mels);
@@ -115,7 +115,7 @@ pub fn googleFrames(wave_len: usize) usize {
 /// Google speech_embedding's 32-bin log-mel: [googleFrames(len)][32].
 /// `window` is [400], `mel` is [257][32], both from the Google weights.
 pub fn googleLogMel(alloc: std.mem.Allocator, dft: Dft, wave: []const f32, window: []const f32, mel: []const f32) ![]f32 {
-    std.debug.assert(window.len == win_length and mel.len == bins * google_mels);
+    if (window.len != win_length or mel.len != bins * google_mels) return error.ShapeMismatch;
     const frames = googleFrames(wave.len);
     const out = try alloc.alloc(f32, frames * google_mels);
     var frame: [n_fft]f32 = undefined;

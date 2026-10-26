@@ -6,8 +6,13 @@
 //!   ConvTranspose1d  weight [in][out][k]
 //! Activations are channel-major: [C][L] for 1-D and [C][H][W] for 2-D.
 //!
-//! These are straightforward loops with an @Vector dot product. The models
-//! are small enough that this runs in milliseconds; optimize after parity.
+//! Most kernels are plain loops over an 8-lane @Vector dot product;
+//! conv2dInto packs eight output positions per SIMD vector.
+//!
+//! The void kernels (dot, linear, conv1d, convTranspose1d, Affine.apply,
+//! Gru.step) assert their slice-length preconditions, which are
+//! only checked in Debug and ReleaseSafe builds. Functions that return an
+//! error union validate their inputs in every build mode.
 
 const std = @import("std");
 
@@ -74,7 +79,7 @@ pub fn argmax(xs: []const f32) usize {
 
 /// [rows][cols] -> [cols][rows]
 pub fn transpose(alloc: std.mem.Allocator, x: []const f32, rows: usize, cols: usize) ![]f32 {
-    std.debug.assert(x.len == rows * cols);
+    if (x.len != rows * cols) return error.ShapeMismatch;
     const out = try alloc.alloc(f32, x.len);
     for (0..rows) |r| {
         for (0..cols) |c| out[c * rows + r] = x[r * cols + c];
@@ -88,6 +93,7 @@ pub const Affine = struct {
     shift: []f32,
 
     pub fn fromBatchNorm(alloc: std.mem.Allocator, weight: []const f32, bias: []const f32, mean: []const f32, variance: []const f32, eps: f32) !Affine {
+        if (bias.len != weight.len or mean.len != weight.len or variance.len != weight.len) return error.ShapeMismatch;
         const scale = try alloc.alloc(f32, weight.len);
         const shift = try alloc.alloc(f32, weight.len);
         for (0..weight.len) |c| {
