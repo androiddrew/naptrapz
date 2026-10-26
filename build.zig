@@ -139,7 +139,7 @@ pub fn build(b: *std.Build) void {
         .name = "abi_smoke",
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
     });
-    abi_smoke.root_module.addCSourceFile(.{ .file = b.path("tests/abi_smoke.c"), .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Werror" } });
+    abi_smoke.root_module.addCSourceFile(.{ .file = b.path("tests/abi_smoke.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" } });
     abi_smoke.root_module.addIncludePath(b.path("include"));
     abi_smoke.root_module.linkLibrary(static);
     const run_abi_smoke = b.addRunArtifact(abi_smoke);

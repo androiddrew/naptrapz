@@ -5,6 +5,8 @@ const bundled = @import("naptrap_bundled");
 // Handles and buffers come from the host's malloc.
 const allocator = std.heap.c_allocator;
 
+// Exported functions return c_int, which matches the naptrap_status enum in
+// naptrap.h on every supported C ABI (C enums with these values are int-sized).
 const Status = enum(c_int) { ok = 0, invalid_argument, invalid_audio, invalid_keyword, unknown_far, model_error, out_of_memory, busy, internal_error };
 threadlocal var diagnostic: [256:0]u8 = @splat(0);
 // The first library log message since the last status was returned. It is
@@ -79,6 +81,9 @@ fn pushStatus(err: naptrap.stream.PushError) Status {
     };
 }
 
+// One busy flag per model serializes every call on the model and its
+// dependents. The Zig Model itself is immutable and thread-safe; this guard
+// protects the per-model scratch arena and the reference counts.
 const Engine = struct {
     scratch: std.heap.ArenaAllocator,
     model: naptrap.Model,
@@ -332,4 +337,11 @@ export fn naptrap_stream_release(stream: ?*Stream) c_int {
         releaseKeywordLocked(keyword);
     }
     return success();
+}
+
+comptime {
+    // Must match the layouts asserted in tests/abi_smoke.c.
+    std.debug.assert(@sizeOf(Prediction) == 32);
+    std.debug.assert(@sizeOf(StreamConfig) == 32);
+    std.debug.assert(@sizeOf(Event) == 56);
 }

@@ -7,6 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The library returns int and fills these structs; their layout is ABI. */
+_Static_assert(sizeof(naptrap_status) == sizeof(int), "naptrap_status must be int-sized");
+_Static_assert(sizeof(naptrap_prediction) == 32, "naptrap_prediction layout");
+_Static_assert(sizeof(naptrap_stream_config) == 32, "naptrap_stream_config layout");
+_Static_assert(sizeof(naptrap_event) == 56, "naptrap_event layout");
+
 static int failures = 0;
 
 #define CHECK(cond)                                                       \

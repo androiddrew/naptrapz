@@ -15,6 +15,7 @@ typedef struct naptrap_model naptrap_model;
 typedef struct naptrap_keyword naptrap_keyword;
 typedef struct naptrap_stream naptrap_stream;
 
+/* Every status-returning function returns one of these values as an int. */
 typedef enum naptrap_status {
     NAPTRAP_OK = 0,
     NAPTRAP_INVALID_ARGUMENT = 1,
@@ -55,8 +56,9 @@ typedef struct naptrap_event {
 
 /* Called synchronously for every complete window, not just wake events.
  * The event pointer is valid only during the callback. Copy it to retain it.
- * Do not call functions on handles sharing this model from the callback:
- * mutating operations return NAPTRAP_BUSY. */
+ * Do not call functions on handles sharing this model from the callback: every
+ * status-returning call on them (including releases, thresholds and keyword
+ * creation) returns NAPTRAP_BUSY. */
 typedef void (*naptrap_event_callback)(void *context, const naptrap_event *event);
 
 uint32_t naptrap_abi_version(void);
@@ -76,7 +78,10 @@ const char *naptrap_last_error(void);
  * Every returned handle must be released exactly once. NULL releases succeed.
  * A released reference must never be used again, even if dependents remain.
  * Serialize operations on handles sharing a model, including releases. Separate
- * models may be used concurrently. Busy operations fail without changing state.
+ * models may be used concurrently, so load one model per thread to detect in
+ * parallel. Overlapping calls on one model are detected and fail with
+ * NAPTRAP_BUSY without changing any handle; out-parameters are still reset
+ * (handles to NULL, numbers and predictions to zero) as on any failure.
  * Foreign pointers must refer to valid, suitably aligned, live memory. */
 naptrap_status naptrap_model_load(const char *model_dir, const char *google_dir,
                                  const char *g2p_dir, naptrap_model **out);
