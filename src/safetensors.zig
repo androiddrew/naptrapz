@@ -144,6 +144,7 @@ fn decode(arena: std.mem.Allocator, dtype: []const u8, raw: []const u8, numel: u
 }
 
 test "parse a small safetensors file" {
+    std.testing.log_level = .err; // the error cases below log expected warnings
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
