@@ -60,7 +60,7 @@ pub const File = struct {
             var numel: usize = 1;
             for (shape_json.array.items, shape) |dim, *out| {
                 out.* = try toUsize(dim);
-                numel *= out.*;
+                numel = std.math.mul(usize, numel, out.*) catch return error.InvalidSafetensors;
             }
 
             const begin = try toUsize(offsets.array.items[0]);
@@ -105,8 +105,8 @@ fn field(object: std.json.Value, key: []const u8, comptime tag: std.meta.Tag(std
 }
 
 fn toUsize(value: std.json.Value) !usize {
-    if (value != .integer or value.integer < 0) return error.InvalidSafetensors;
-    return @intCast(value.integer);
+    if (value != .integer) return error.InvalidSafetensors;
+    return std.math.cast(usize, value.integer) orelse error.InvalidSafetensors;
 }
 
 /// Returns null for non-float dtypes, which callers skip.
@@ -128,7 +128,8 @@ fn decode(arena: std.mem.Allocator, dtype: []const u8, raw: []const u8, numel: u
         .f16, .bf16 => 2,
     };
 
-    if (raw.len != numel * width) return error.InvalidSafetensors;
+    const len = std.math.mul(usize, numel, width) catch return error.InvalidSafetensors;
+    if (raw.len != len) return error.InvalidSafetensors;
     const out = try arena.alloc(f32, numel);
     for (out, 0..) |*value, i| {
         const at = i * width;
@@ -166,4 +167,24 @@ test "parse a small safetensors file" {
     try std.testing.expectError(error.MissingTensor, file.get("n"));
     try std.testing.expectError(error.ShapeMismatch, file.expect("w", &.{ 1, 2 }));
     try std.testing.expectEqualStrings("hey computer", file.metadataString("keyword").?);
+}
+
+test "reject shapes whose element count overflows" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    inline for (.{
+        \\{"w":{"dtype":"F32","shape":[4611686018427387904,4],"data_offsets":[0,0]}}
+        ,
+        \\{"w":{"dtype":"F32","shape":[1073741824],"data_offsets":[0,0]}}
+        ,
+        \\{"w":{"dtype":"F32","shape":[-1],"data_offsets":[0,0]}}
+        ,
+    }) |header| {
+        var bytes: [8 + header.len]u8 = undefined;
+        std.mem.writeInt(u64, bytes[0..8], header.len, .little);
+        @memcpy(bytes[8..], header);
+        try std.testing.expectError(error.InvalidSafetensors, File.parse(arena, &bytes));
+    }
 }
