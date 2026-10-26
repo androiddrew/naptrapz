@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/); the C ABI is versioned separately
 by `NAPTRAP_ABI_VERSION`.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-26
 
 First public release.
 
@@ -23,3 +23,5 @@ First public release.
   comparison with the PyTorch reference.
 - Unit tests, end-to-end model tests (`-Dtest-models=DIR`), a C ABI smoke test,
   and `check` and `docs` build steps.
+
+[0.1.0]: https://github.com/androiddrew/naptrapz/releases/tag/v0.1.0

@@ -1,4 +1,4 @@
-# naptrap-zig
+# naptrapz
 
 A Zig 0.16 inference runtime for [naptrap](https://github.com/androiddrew/naptrap)'s
 PhonMatchNet text-defined wake word model. It has no dependencies beyond the Zig
@@ -43,14 +43,17 @@ and may produce at most 128 feature rows (roughly twenty words).
 ## Using naptrap from Zig
 
 ```sh
-zig fetch --save "git+<repository URL>#v0.1.0"
+zig fetch --save git+https://github.com/androiddrew/naptrapz#v0.1.0
 ```
 
 ```zig
 // build.zig
-const naptrap = b.dependency("naptrap_zig", .{ .target = target, .optimize = optimize });
+const naptrap = b.dependency("naptrapz", .{ .target = target, .optimize = optimize });
 exe.root_module.addImport("naptrap", naptrap.module("naptrap"));
 ```
+
+The `naptrapz` package exports the `naptrap` module (and `naptrap_bundled` for
+embedded models). The CLI, C library and header keep the `naptrap` name.
 
 ```zig
 const naptrap = @import("naptrap");

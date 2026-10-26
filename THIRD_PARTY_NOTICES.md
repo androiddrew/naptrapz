@@ -1,6 +1,6 @@
 # Third-party notices
 
-naptrap-zig's own code is licensed under Apache-2.0 (see `LICENSE` and `NOTICE`).
+naptrapz's own code is licensed under Apache-2.0 (see `LICENSE` and `NOTICE`).
 The source package contains **no model weights**. Weights are downloaded
 separately from Hugging Face, and each repository carries its own license and
 notices. Builds made with `-Dembed-models=DIR` contain the weights you supply;
@@ -15,5 +15,5 @@ distribute them with those repositories' license and NOTICE files.
 | Unicode Character Database 15.0.0, © Unicode, Inc. | generated normalization table (`src/unicode_data.zig`) | Unicode License V3 | `licenses/Unicode-License-v3.txt`, <https://www.unicode.org/license.txt> |
 | LibriSpeech (Panayotov et al.) | training data for the PhonMatchNet weights | CC BY 4.0 | <https://www.openslr.org/12> |
 
-naptrap-zig and these weights are not affiliated with or endorsed by NCSOFT,
+naptrapz and these weights are not affiliated with or endorsed by NCSOFT,
 the PhonMatchNet authors, Google, the g2p_en authors or Unicode, Inc.

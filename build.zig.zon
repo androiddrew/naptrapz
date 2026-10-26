@@ -1,7 +1,7 @@
 .{
-    .name = .naptrap_zig,
+    .name = .naptrapz,
     .version = "0.1.0",
-    .fingerprint = 0x63d51476e8a11e0d,
+    .fingerprint = 0x9d3e49ab7f019c64,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
