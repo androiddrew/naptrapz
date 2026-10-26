@@ -27,22 +27,55 @@ fn success() c_int {
     return @intFromEnum(Status.ok);
 }
 
-fn fail(err: anyerror, fallback: Status) c_int {
+/// Record `err` (and any captured log detail) as this thread's diagnostic.
+fn fail(err: anyerror, status: Status) c_int {
     var writer: std.Io.Writer = .fixed(diagnostic[0 .. diagnostic.len - 1]);
     writer.writeAll(@errorName(err)) catch {};
     if (detail_len != 0) writer.print(": {s}", .{detail[0..detail_len]}) catch {};
     diagnostic[writer.end] = 0;
     detail_len = 0;
-    const status: Status = switch (err) {
-        error.OutOfMemory => .out_of_memory,
-        error.InvalidArgument, error.InvalidStreamConfig, error.SampleCounterOverflow => .invalid_argument,
-        error.InvalidSamples, error.ClipLengthOutOfRange, error.InvalidSampleRate => .invalid_audio,
-        error.InvalidUtf8, error.KeywordTooLong, error.SpellOutNumbers, error.NoLetters, error.NoPhoneticFeatures, error.FeatureLengthOutOfRange, error.InvalidFeatures => .invalid_keyword,
-        error.UnknownOperatingPoint => .unknown_far,
-        error.Busy => .busy,
-        else => fallback,
-    };
     return @intFromEnum(status);
+}
+
+// The switches below are exhaustive, so adding or renaming an error in the
+// core library forces a decision about its C status here.
+
+fn loadStatus(err: anyerror) Status {
+    // File-system errors are open-ended; everything but OOM is a model error.
+    return if (err == error.OutOfMemory) .out_of_memory else .model_error;
+}
+
+fn keywordStatus(err: KeywordCreateError) Status {
+    return switch (err) {
+        error.OutOfMemory => .out_of_memory,
+        error.KeywordTooLong, error.InvalidUtf8, error.SpellOutNumbers, error.NoLetters, error.NoPhoneticFeatures, error.FeatureLengthOutOfRange, error.ShapeMismatch, error.InvalidFeatures => .invalid_keyword,
+    };
+}
+
+fn detectStatus(err: naptrap.model.DetectError) Status {
+    return switch (err) {
+        error.OutOfMemory => .out_of_memory,
+        error.UnknownOperatingPoint => .unknown_far,
+        error.ClipLengthOutOfRange, error.InvalidSamples => .invalid_audio,
+        // Keywords are validated when created, and audio before inference.
+        error.InvalidFeatures, error.ClipTooShort, error.InputTooShort, error.ShapeMismatch, error.FeatureLengthOutOfRange, error.FeatureLengthMismatch, error.UnexpectedEmbeddingShape, error.InvalidLogit => .internal_error,
+    };
+}
+
+fn streamInitStatus(err: naptrap.stream.InitError) Status {
+    return switch (err) {
+        error.OutOfMemory => .out_of_memory,
+        error.InvalidStreamConfig => .invalid_argument,
+        error.UnknownOperatingPoint => .unknown_far,
+        error.FeatureLengthOutOfRange, error.ShapeMismatch, error.InvalidFeatures => .internal_error,
+    };
+}
+
+fn pushStatus(err: naptrap.stream.PushError) Status {
+    return switch (err) {
+        error.SampleCounterOverflow => .invalid_argument,
+        else => |e| detectStatus(e),
+    };
 }
 
 const Engine = struct {
@@ -51,7 +84,7 @@ const Engine = struct {
     references: usize = 1,
     busy: std.atomic.Value(bool) = .init(false),
 
-    fn enter(self: *Engine) !void {
+    fn enter(self: *Engine) error{Busy}!void {
         if (self.busy.cmpxchgStrong(false, true, .acquire, .monotonic) != null) return error.Busy;
     }
     fn leave(self: *Engine) void {
@@ -130,7 +163,7 @@ fn loadEmbedded() !*Engine {
 export fn naptrap_model_load_embedded(out: ?*?*Engine) c_int {
     const result = out orelse return fail(error.InvalidArgument, .invalid_argument);
     result.* = null;
-    result.* = loadEmbedded() catch |err| return fail(err, .model_error);
+    result.* = loadEmbedded() catch |err| return fail(err, loadStatus(err));
     return success();
 }
 
@@ -138,7 +171,7 @@ export fn naptrap_model_load(model_dir: ?[*:0]const u8, google_dir: ?[*:0]const 
     const result = out orelse return fail(error.InvalidArgument, .invalid_argument);
     result.* = null;
     if (model_dir == null or google_dir == null or g2p_dir == null) return fail(error.InvalidArgument, .invalid_argument);
-    result.* = load(model_dir.?, google_dir.?, g2p_dir.?) catch |err| return fail(err, .model_error);
+    result.* = load(model_dir.?, google_dir.?, g2p_dir.?) catch |err| return fail(err, loadStatus(err));
     return success();
 }
 
@@ -177,7 +210,9 @@ export fn naptrap_model_threshold(model: ?*Engine, far: f64, out: ?*f64) c_int {
     return success();
 }
 
-fn createKeyword(engine: *Engine, text: []const u8) !*Keyword {
+const KeywordCreateError = naptrap.text.EncodeError || naptrap.model.KeywordError;
+
+fn createKeyword(engine: *Engine, text: []const u8) KeywordCreateError!*Keyword {
     const keyword = try allocator.create(Keyword);
     errdefer allocator.destroy(keyword);
     keyword.* = .{ .engine = engine, .arena = std.heap.ArenaAllocator.init(allocator), .value = undefined, .text = undefined };
@@ -196,7 +231,7 @@ export fn naptrap_keyword_create(model: ?*Engine, utf8: ?[*]const u8, length: us
     if (utf8 == null and length != 0) return fail(error.InvalidArgument, .invalid_argument);
     engine.enter() catch |err| return fail(err, .busy);
     defer engine.leave();
-    result.* = createKeyword(engine, if (utf8) |ptr| ptr[0..length] else "") catch |err| return fail(err, .invalid_keyword);
+    result.* = createKeyword(engine, if (utf8) |ptr| ptr[0..length] else "") catch |err| return fail(err, keywordStatus(err));
     return success();
 }
 
@@ -223,7 +258,7 @@ export fn naptrap_detect(model: ?*Engine, keyword: ?*const Keyword, samples: ?[*
     engine.enter() catch |err| return fail(err, .busy);
     defer engine.leave();
     _ = engine.scratch.reset(.retain_capacity);
-    const p = engine.model.detect(engine.scratch.allocator(), samples.?[0..count], kw.value, far) catch |err| return fail(err, .internal_error);
+    const p = engine.model.detect(engine.scratch.allocator(), samples.?[0..count], kw.value, far) catch |err| return fail(err, detectStatus(err));
     result.* = Prediction.from(p);
     return success();
 }
@@ -232,7 +267,7 @@ export fn naptrap_stream_config_default(out: ?*StreamConfig) void {
     if (out) |config| config.* = .{ .window_samples = 24000, .hop_samples = 4000, .trigger_windows = 2, .release_windows = 2, .cooldown_samples = 16000, .far = 0.01 };
 }
 
-fn createStream(keyword: *Keyword, config: naptrap.stream.Config) !*Stream {
+fn createStream(keyword: *Keyword, config: naptrap.stream.Config) naptrap.stream.InitError!*Stream {
     const stream = try allocator.create(Stream);
     errdefer allocator.destroy(stream);
     stream.* = .{ .keyword = keyword, .value = try naptrap.Stream.init(allocator, &keyword.engine.model, keyword.value, config) };
@@ -246,14 +281,14 @@ export fn naptrap_stream_create(keyword: ?*Keyword, config: ?*const StreamConfig
     const kw = keyword orelse return fail(error.InvalidArgument, .invalid_argument);
     kw.engine.enter() catch |err| return fail(err, .busy);
     defer kw.engine.leave();
-    result.* = createStream(kw, if (config) |c| c.native() else .{}) catch |err| return fail(err, .invalid_argument);
+    result.* = createStream(kw, if (config) |c| c.native() else .{}) catch |err| return fail(err, streamInitStatus(err));
     return success();
 }
 
 const EmitContext = struct {
     callback: Callback,
     context: ?*anyopaque,
-    fn emit(self: *EmitContext, event: naptrap.stream.Event) !void {
+    fn emit(self: *EmitContext, event: naptrap.stream.Event) void {
         const value: Event = .{ .start_sample = event.start_sample, .end_sample = event.end_sample, .prediction = Prediction.from(event.prediction), .triggered = @intFromBool(event.triggered), .reserved = 0 };
         self.callback(self.context, &value);
     }
@@ -267,7 +302,7 @@ export fn naptrap_stream_push(stream: ?*Stream, samples: ?[*]const f32, count: u
     value.keyword.engine.enter() catch |err| return fail(err, .busy);
     defer value.keyword.engine.leave();
     var output = EmitContext{ .callback = emit, .context = context };
-    value.value.push(if (samples) |ptr| ptr[0..count] else &.{}, &output, EmitContext.emit) catch |err| return fail(err, .internal_error);
+    value.value.push(if (samples) |ptr| ptr[0..count] else &.{}, &output, EmitContext.emit) catch |err| return fail(err, pushStatus(err));
     return success();
 }
 

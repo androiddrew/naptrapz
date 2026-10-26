@@ -2,15 +2,23 @@
 const std = @import("std");
 const model_mod = @import("model.zig");
 
+/// Sliding-window and debounce settings. Durations are in 16 kHz samples.
 pub const Config = struct {
+    /// Samples scored per window, 8000-32000 (0.5-2 s).
     window_samples: usize = 24000,
+    /// Samples between window ends, 1 to `window_samples`.
     hop_samples: usize = 4000,
+    /// Consecutive accepted windows needed to trigger a wake.
     trigger_windows: usize = 2,
+    /// Consecutive rejected windows needed to rearm after a wake.
     release_windows: usize = 2,
+    /// Minimum samples between the ends of two triggering windows.
     cooldown_samples: u64 = 16000,
+    /// Calibrated operating point passed to `Model.detect`.
     far: f64 = 0.01,
 
-    pub fn validate(self: Config) !void {
+    /// error.InvalidStreamConfig if a field is out of range.
+    pub fn validate(self: Config) error{InvalidStreamConfig}!void {
         if (self.window_samples < 8000 or self.window_samples > 32000 or
             self.hop_samples == 0 or self.hop_samples > self.window_samples or
             self.trigger_windows == 0 or self.release_windows == 0)
@@ -18,13 +26,32 @@ pub const Config = struct {
     }
 };
 
+/// The result for one complete window.
 pub const Event = struct {
     /// Audio sample positions since construction/reset; end is exclusive.
     start_sample: u64,
     end_sample: u64,
     prediction: model_mod.Prediction,
+    /// Whether this window raised a debounced wake event.
     triggered: bool,
 };
+
+/// Errors from `Stream.init`.
+pub const InitError = std.mem.Allocator.Error || model_mod.KeywordError || error{ InvalidStreamConfig, UnknownOperatingPoint };
+
+/// Errors from `Stream.push`, not counting the callback's own errors.
+pub const PushError = model_mod.DetectError || error{
+    /// More than 2^64 samples would have been pushed since the last reset.
+    SampleCounterOverflow,
+};
+
+fn CallbackError(comptime emit: anytype) type {
+    const Return = @typeInfo(@TypeOf(emit)).@"fn".return_type.?;
+    return switch (@typeInfo(Return)) {
+        .error_union => |info| info.error_set,
+        else => error{},
+    };
+}
 
 const Gate = struct {
     positive: usize = 0,
@@ -67,7 +94,8 @@ pub const Stream = struct {
     next_end: u64,
     gate: Gate = .{},
 
-    pub fn init(allocator: std.mem.Allocator, model: *const model_mod.Model, keyword: model_mod.Keyword, config: Config) !Stream {
+    /// Validate `config` and allocate two window buffers from `allocator`.
+    pub fn init(allocator: std.mem.Allocator, model: *const model_mod.Model, keyword: model_mod.Keyword, config: Config) InitError!Stream {
         try config.validate();
         _ = try model.threshold(config.far);
         try model_mod.validateKeyword(keyword);
@@ -86,6 +114,7 @@ pub const Stream = struct {
         };
     }
 
+    /// Free the stream's buffers.
     pub fn deinit(self: *Stream) void {
         self.scratch.deinit();
         self.allocator.free(self.window);
@@ -93,6 +122,8 @@ pub const Stream = struct {
         self.* = undefined;
     }
 
+    /// Start a new audio timeline: clear buffered audio, sample positions and
+    /// debounce state. Scratch capacity is kept.
     pub fn reset(self: *Stream) void {
         self.write_at = 0;
         self.total_samples = 0;
@@ -101,7 +132,11 @@ pub const Stream = struct {
         _ = self.scratch.reset(.retain_capacity);
     }
 
-    pub fn push(self: *Stream, samples: []const f32, context: anytype, comptime emit: fn (@TypeOf(context), Event) anyerror!void) !void {
+    /// Append `samples` (any length, finite, in [-1, 1]) and call
+    /// `emit(context, event)` once for every window that completes. `emit` may
+    /// return `void` or an error union; its errors are passed through.
+    /// error.InvalidSamples leaves the stream unchanged.
+    pub fn push(self: *Stream, samples: []const f32, context: anytype, comptime emit: anytype) (PushError || CallbackError(emit))!void {
         for (samples) |x| if (!std.math.isFinite(x) or @abs(x) > 1) return error.InvalidSamples;
         const final_end = std.math.add(u64, self.total_samples, samples.len) catch return error.SampleCounterOverflow;
         if (final_end > std.math.maxInt(u64) - @as(u64, self.config.hop_samples)) return error.SampleCounterOverflow;
@@ -122,12 +157,14 @@ pub const Stream = struct {
                 const prediction = try self.model.detect(self.scratch.allocator(), self.window, self.keyword, self.config.far);
                 const triggered = self.gate.update(self.config, prediction.accepted, self.total_samples);
                 self.next_end += self.config.hop_samples;
-                try emit(context, .{
+                const event: Event = .{
                     .start_sample = self.total_samples - self.ring.len,
                     .end_sample = self.total_samples,
                     .prediction = prediction,
                     .triggered = triggered,
-                });
+                };
+                const Return = @typeInfo(@TypeOf(emit)).@"fn".return_type.?;
+                if (@typeInfo(Return) == .error_union) try emit(context, event) else emit(context, event);
             }
         }
     }

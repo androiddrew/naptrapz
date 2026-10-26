@@ -26,7 +26,33 @@ pub const Threshold = struct {
 
 pub const Keyword = text_mod.G2p.Features;
 
-pub fn validateKeyword(keyword: Keyword) !void {
+/// Errors for keyword features that the matcher cannot consume.
+pub const KeywordError = error{ FeatureLengthOutOfRange, ShapeMismatch, InvalidFeatures };
+
+/// Inference failures that validated input should never produce.
+pub const InferenceError = std.mem.Allocator.Error || error{
+    ClipTooShort,
+    InputTooShort,
+    ShapeMismatch,
+    FeatureLengthOutOfRange,
+    FeatureLengthMismatch,
+    UnexpectedEmbeddingShape,
+};
+
+/// Errors from `Model.detect`.
+pub const DetectError = KeywordError || InferenceError || error{
+    /// `far` is not one of the model's calibrated operating points.
+    UnknownOperatingPoint,
+    /// Fewer than 8000 or more than 32000 samples.
+    ClipLengthOutOfRange,
+    /// A sample is not finite or lies outside [-1, 1].
+    InvalidSamples,
+    /// The network produced a non-finite logit.
+    InvalidLogit,
+};
+
+/// Check that keyword features have 1 to `text.max_rows` finite 256-wide rows.
+pub fn validateKeyword(keyword: Keyword) KeywordError!void {
     if (keyword.rows < 1 or keyword.rows > text_mod.max_rows) return error.FeatureLengthOutOfRange;
     if (keyword.data.len != keyword.rows * 256) return error.ShapeMismatch;
     for (keyword.data) |value| if (!std.math.isFinite(value)) return error.InvalidFeatures;
@@ -212,7 +238,7 @@ pub const Model = struct {
     /// The score threshold for the calibrated false-accept rate `far`, which
     /// must exactly equal one of `thresholds` (0.01 or 0.1 for the released
     /// model); otherwise error.UnknownOperatingPoint.
-    pub fn threshold(self: Model, far: f64) !f64 {
+    pub fn threshold(self: Model, far: f64) error{UnknownOperatingPoint}!f64 {
         for (self.thresholds) |t| {
             if (t.far == far) return t.value;
         }
@@ -222,7 +248,7 @@ pub const Model = struct {
     /// Normalize `keyword_text` and compute its text features once, for reuse
     /// across clips. The result is allocated from `gpa`; free it with
     /// `Keyword.deinit`.
-    pub fn keyword(self: Model, gpa: std.mem.Allocator, keyword_text: []const u8) !Keyword {
+    pub fn keyword(self: Model, gpa: std.mem.Allocator, keyword_text: []const u8) text_mod.EncodeError!Keyword {
         return self.g2p.encode(gpa, keyword_text);
     }
 
@@ -232,7 +258,7 @@ pub const Model = struct {
     /// `scratch` receives about 2-3 MiB of per-call buffers that are never
     /// freed individually: pass an arena (or a FixedBufferAllocator) and
     /// reset it between calls, e.g. `arena.reset(.retain_capacity)`.
-    pub fn detect(self: Model, scratch: std.mem.Allocator, wave: []const f32, kw: Keyword, far: f64) !Prediction {
+    pub fn detect(self: Model, scratch: std.mem.Allocator, wave: []const f32, kw: Keyword, far: f64) DetectError!Prediction {
         const limit = try self.threshold(far);
         try validateKeyword(kw);
         if (wave.len < features.sample_rate / 2 or wave.len > features.sample_rate * 2) return error.ClipLengthOutOfRange;

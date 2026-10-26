@@ -68,9 +68,27 @@ fn isLetter(c: u8) bool {
     return c >= 'a' and c <= 'z';
 }
 
+/// Errors for keyword text that cannot be used.
+pub const NormalizeError = std.mem.Allocator.Error || error{
+    /// Longer than `max_keyword_bytes`.
+    KeywordTooLong,
+    InvalidUtf8,
+    /// The keyword contains digits; spell numbers out as words.
+    SpellOutNumbers,
+    /// No English letters remain after normalization.
+    NoLetters,
+};
+
+/// Errors from `G2p.encode`.
+pub const EncodeError = NormalizeError || error{
+    NoPhoneticFeatures,
+    /// More than `max_rows` feature rows.
+    FeatureLengthOutOfRange,
+};
+
 /// Lowercased words joined by single spaces, e.g. "Héllo, WORLD’s" -> "hello world's".
 /// Input longer than `max_keyword_bytes` returns error.KeywordTooLong.
-pub fn normalize(arena: std.mem.Allocator, keyword: []const u8) ![]const u8 {
+pub fn normalize(arena: std.mem.Allocator, keyword: []const u8) NormalizeError![]const u8 {
     if (keyword.len > max_keyword_bytes) return error.KeywordTooLong;
     const view = std.unicode.Utf8View.init(keyword) catch return error.InvalidUtf8;
     var folded: std.ArrayList(u8) = .empty;
@@ -169,7 +187,7 @@ pub const G2p = struct {
     /// Normalize `keyword` and compute its decoder-state rows, allocated from
     /// `gpa`. Encoding stops with error.FeatureLengthOutOfRange as soon as it
     /// exceeds `max_rows`.
-    pub fn encode(self: G2p, gpa: std.mem.Allocator, keyword: []const u8) !Features {
+    pub fn encode(self: G2p, gpa: std.mem.Allocator, keyword: []const u8) EncodeError!Features {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
@@ -197,12 +215,12 @@ pub const G2p = struct {
 
     const Work = struct { h: []f32, scratch: []f32, logits: []f32 };
 
-    fn appendRow(self: G2p, arena: std.mem.Allocator, rows: *std.ArrayList(f32), row: []const f32) !void {
+    fn appendRow(self: G2p, arena: std.mem.Allocator, rows: *std.ArrayList(f32), row: []const f32) EncodeError!void {
         if (rows.items.len / self.size >= max_rows) return error.FeatureLengthOutOfRange;
         try rows.appendSlice(arena, row);
     }
 
-    fn encodeWord(self: G2p, arena: std.mem.Allocator, w: []const u8, rows: *std.ArrayList(f32), work: Work) !void {
+    fn encodeWord(self: G2p, arena: std.mem.Allocator, w: []const u8, rows: *std.ArrayList(f32), work: Work) EncodeError!void {
         const size = self.size;
         const h = work.h;
         @memset(h, 0);
