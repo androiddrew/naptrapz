@@ -23,7 +23,7 @@ const Check = struct {
 
 const Metric = enum { absolute, power_log10, magnitude_log };
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
         break :blk @as(u8, 2);
     };
     try out.flush();
-    std.process.exit(code);
+    return code;
 }
 
 fn run(io: std.Io, arena: std.mem.Allocator, args: []const [:0]const u8, out: *std.Io.Writer) !u8 {
