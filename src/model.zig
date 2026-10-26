@@ -24,6 +24,12 @@ pub const Threshold = struct {
 
 pub const Keyword = text_mod.G2p.Features;
 
+pub fn validateKeyword(keyword: Keyword) !void {
+    if (keyword.rows < 1 or keyword.rows > 128) return error.FeatureLengthOutOfRange;
+    if (keyword.data.len != keyword.rows * 256) return error.ShapeMismatch;
+    for (keyword.data) |value| if (!std.math.isFinite(value)) return error.InvalidFeatures;
+}
+
 pub const Prediction = struct {
     score: f32,
     logit: f32,
@@ -158,6 +164,7 @@ pub const Model = struct {
     /// `scratch` holds per-call buffers; an arena you reset per clip works well.
     pub fn detect(self: Model, scratch: std.mem.Allocator, wave: []const f32, kw: Keyword, far: f64) !Prediction {
         const limit = try self.threshold(far);
+        try validateKeyword(kw);
         if (wave.len < features.sample_rate / 2 or wave.len > features.sample_rate * 2) return error.ClipLengthOutOfRange;
         for (wave) |x| {
             if (!std.math.isFinite(x) or @abs(x) > 1) return error.InvalidSamples;

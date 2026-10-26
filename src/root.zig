@@ -17,6 +17,8 @@ pub const google = @import("google.zig");
 pub const phonmatchnet = @import("phonmatchnet.zig");
 pub const wav = @import("wav.zig");
 pub const model = @import("model.zig");
+pub const stream = @import("stream.zig");
+pub const Stream = stream.Stream;
 
 pub const Model = model.Model;
 pub const Keyword = model.Keyword;

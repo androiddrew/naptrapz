@@ -25,6 +25,7 @@ decisions match Python, with maximum score difference below `2e-6` in ReleaseFas
 | `src/model.zig` | Verifies artifact formats, SHA-256, encoder pins, Google provenance and G2P dimensions; `keyword()` and `detect()` |
 | `src/wav.zig` | Mono 16 kHz 16-bit PCM WAV reader |
 | `src/main.zig` | CLI with the same JSON output and exit codes as `naptrap detect` |
+| `src/stream.zig` | Chunk-independent sliding windows, sample timestamps and debounced wake events |
 | `src/parity.zig` | Compares each stage against PyTorch fixtures |
 | `tools/dump_fixtures.py` | Writes those fixtures from the Python model |
 | `tools/generate_unicode.py` | Rebuilds/checks the versioned Unicode source table with Python 3.12 |
@@ -53,6 +54,49 @@ The CLI accepts mono, 16 kHz, 16-bit PCM WAVs of 0.5–2 seconds. It prints JSON
 and exits with **0** for an accepted keyword, **1** for rejection, or **2** for an
 input/model error. `--far` must exactly select a calibrated operating point;
 the released model provides `0.01` (default) and `0.1`.
+
+## Streaming listener
+
+`listen` reads **raw mono 16 kHz signed 16-bit little-endian PCM** from stdin
+(no WAV header), keeps the model and keyword loaded, and emits one JSON line per
+debounced wake event. For example, from a Linux microphone or an existing file:
+
+```sh
+arecord -q -t raw -f S16_LE -r 16000 -c 1 | \
+    ../work/bin/naptrap listen "hey computer" --models ../work/models
+ffmpeg -v error -i recording.wav -f s16le -ac 1 -ar 16000 - | \
+    ../work/bin/naptrap listen "hey computer" --models ../work/models --all-windows
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--window-ms` | 1500 | Window duration, 500–2000 ms |
+| `--hop-ms` | 250 | Time between evaluations, positive and no larger than the window |
+| `--trigger-windows` | 2 | Consecutive accepted windows required to trigger |
+| `--release-windows` | 2 | Consecutive rejected windows required to rearm |
+| `--cooldown-ms` | 1000 | Minimum audio time between wake events |
+| `--far` | 0.01 | Exact calibrated per-clip operating point |
+| `--all-windows` | off | Emit scores for every window, including rejected/suppressed windows |
+
+Events contain `event` (`wake` or `window`), normalized `keyword`, `score`,
+`keyword_logit`, `threshold`, `accepted`, `triggered`, `target_far`, and audio
+`start_sample`/`end_sample` and seconds. End positions are exclusive. `accepted`
+describes the model threshold; `triggered` additionally applies debouncing.
+Timestamps count received samples, not wall-clock time. Continuous acceptance
+produces only one wake until rejected windows rearm the detector. A successful
+EOF exits 0, even without wakes; errors exit 2. Partial final windows are not
+padded. An odd trailing PCM byte is an error. Output is flushed per event.
+
+Zig applications can use `naptrap.Stream.init(allocator, &model, keyword, config)`
+and `stream.push(samples, context, callback)` with arbitrary float32 chunks in
+`[-1, 1]`. The synchronous callback receives every complete window and its
+`triggered` flag. The model and keyword are borrowed and must outlive the stream.
+Serialize calls; callbacks must not reenter it. `reset()` clears audio history,
+timestamps and debounce state while retaining scratch capacity. Invalid sample
+chunks leave state unchanged; reset after other push/callback failures. Call
+`deinit()` when finished. Feed already resampled 16 kHz audio: capture/resampling
+and VAD/STT/TTS remain the host application's responsibilities. Repeated-window
+false-alarm rates need evaluation separately from the per-clip FAR calibration.
 
 ## Parity workflow
 
@@ -141,7 +185,7 @@ must not be allocated from an arena reset between detections.
 
 ## Next steps
 
-- Add a streaming listener (sliding 1.5 s windows) with debouncing.
+- Streaming listener and reusable detector: implemented (see above).
 - Reduce intermediate feature-map storage and profile the remaining matcher work.
 - Export a C ABI (`keyword`, `detect`) so Python, Swift or Rust can call it.
 - Optionally `@embedFile` the weights into a single static binary.
