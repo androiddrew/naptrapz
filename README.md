@@ -305,6 +305,7 @@ inference around 22 ms and preserves numerical parity.
 
 ## License
 
-Apache-2.0, following naptrap. The network follows the PhonMatchNet design
-(Lee & Cho, Interspeech 2023) and NCSOFT's BSD-3-Clause reference code; see
-naptrap's NOTICE and THIRD_PARTY_NOTICES.md.
+Apache-2.0; see `LICENSE` and `NOTICE`. The network follows the PhonMatchNet
+design (Lee & Cho, Interspeech 2023) and NCSOFT's BSD-3-Clause reference code,
+and the keyword normalization table is generated from Unicode data. Third-party
+licenses are in `licenses/` and summarized in `THIRD_PARTY_NOTICES.md`.

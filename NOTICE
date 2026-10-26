@@ -1,0 +1,23 @@
+naptrap-zig
+Copyright 2026 Drew Bednar
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+src/phonmatchnet.zig implements the PhonMatchNet architecture (Yong-Hyeok Lee
+and Namhyun Cho, Interspeech 2023) after NCSOFT's BSD-3-Clause PyTorch
+implementation, https://github.com/ncsoft/PhonMatchNet.
+NCSOFT's copyright notice and license: licenses/PhonMatchNet-BSD-3-Clause.txt.
+naptrap-zig is not affiliated with or endorsed by NCSOFT or the PhonMatchNet
+authors.
+
+src/text.zig reimplements the decoder-state "embedding" computation of g2p_en
+by Kyubyong Park and Jongseok Kim (Apache-2.0), https://github.com/Kyubyong/g2p.
+
+src/google.zig reimplements Google's speech_embedding/1 model (Apache-2.0).
+naptrap-zig is not affiliated with or endorsed by Google.
+
+src/unicode_data.zig is generated from the Unicode Character Database 15.0.0
+by tools/generate_unicode.py. Unicode data is used under the Unicode License
+V3: licenses/Unicode-License-v3.txt.
+
+Model weights are not included in this package; see THIRD_PARTY_NOTICES.md.
