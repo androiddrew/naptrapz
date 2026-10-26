@@ -1,0 +1,4 @@
+.zig-cache/
+zig-out/
+# Downloaded model artifacts (see README "Get the models").
+/models/

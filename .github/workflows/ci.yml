@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig fmt --check src tests build.zig build.zig.zon
+      - run: zig build test --summary all
+      - run: zig build test -Doptimize=ReleaseSafe --summary all
+
+  cross:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86-linux-musl
+          - arm-linux-musleabihf
+          - aarch64-linux-musl
+          - riscv64-linux-musl
+          - wasm32-wasi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig build check -Dtarget=${{ matrix.target }}
+
+  models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: pip install "huggingface_hub[cli]"
+      - name: Download the v1 artifacts
+        run: |
+          hf download androiddrew/naptrap-phonmatchnet-en --revision v1 --local-dir models/phonmatchnet
+          hf download androiddrew/google-speech-embedding-pytorch --revision v1 --local-dir models/google
+          hf download androiddrew/g2p-en-decoder-pytorch --revision v1 --local-dir models/g2p
+      - run: zig build test -Dtest-models=models --summary all
+      - run: zig build test -Dtest-models=models -Dtarget=x86-linux-musl --summary all
+      - run: zig build test -Dtest-models=models -Doptimize=ReleaseFast --summary all
