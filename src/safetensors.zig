@@ -117,21 +117,12 @@ fn toUsize(value: std.json.Value) !usize {
 
 /// Returns null for non-float dtypes, which callers skip.
 fn decode(arena: std.mem.Allocator, dtype: []const u8, raw: []const u8, numel: usize) !?[]f32 {
-    const Kind = enum { f32, f64, f16, bf16 };
-    const kind: Kind = if (std.mem.eql(u8, dtype, "F32"))
-        .f32
-    else if (std.mem.eql(u8, dtype, "F64"))
-        .f64
-    else if (std.mem.eql(u8, dtype, "F16"))
-        .f16
-    else if (std.mem.eql(u8, dtype, "BF16"))
-        .bf16
-    else
-        return null;
+    const Kind = enum { F32, F64, F16, BF16 };
+    const kind = std.meta.stringToEnum(Kind, dtype) orelse return null;
     const width: usize = switch (kind) {
-        .f32 => 4,
-        .f64 => 8,
-        .f16, .bf16 => 2,
+        .F32 => 4,
+        .F64 => 8,
+        .F16, .BF16 => 2,
     };
 
     const len = std.math.mul(usize, numel, width) catch return error.InvalidSafetensors;
@@ -140,10 +131,10 @@ fn decode(arena: std.mem.Allocator, dtype: []const u8, raw: []const u8, numel: u
     for (out, 0..) |*value, i| {
         const at = i * width;
         value.* = switch (kind) {
-            .f32 => @bitCast(std.mem.readInt(u32, raw[at..][0..4], .little)),
-            .f64 => @floatCast(@as(f64, @bitCast(std.mem.readInt(u64, raw[at..][0..8], .little)))),
-            .f16 => @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, raw[at..][0..2], .little)))),
-            .bf16 => @bitCast(@as(u32, std.mem.readInt(u16, raw[at..][0..2], .little)) << 16),
+            .F32 => @bitCast(std.mem.readInt(u32, raw[at..][0..4], .little)),
+            .F64 => @floatCast(@as(f64, @bitCast(std.mem.readInt(u64, raw[at..][0..8], .little)))),
+            .F16 => @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, raw[at..][0..2], .little)))),
+            .BF16 => @bitCast(@as(u32, std.mem.readInt(u16, raw[at..][0..2], .little)) << 16),
         };
     }
     return out;
@@ -151,7 +142,7 @@ fn decode(arena: std.mem.Allocator, dtype: []const u8, raw: []const u8, numel: u
 
 test "parse a small safetensors file" {
     std.testing.log_level = .err; // the error cases below log expected warnings
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -177,7 +168,7 @@ test "parse a small safetensors file" {
 }
 
 test "reject shapes whose element count overflows" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

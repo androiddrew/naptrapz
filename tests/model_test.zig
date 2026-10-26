@@ -30,11 +30,11 @@ test "load and fromBytes give the same model" {
     defer model.deinit();
 
     var parts: [3]naptrap.model.ArtifactBytes = undefined;
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     for (&parts, [_][]const u8{ "phonmatchnet", "google", "g2p" }) |*part, name| {
-        var dir = try std.Io.Dir.cwd().openDir(testing.io, try std.fs.path.join(arena, &.{ options.models_dir, name }), .{});
+        var dir = try std.Io.Dir.cwd().openDir(testing.io, try std.Io.Dir.path.join(arena, &.{ options.models_dir, name }), .{});
         defer dir.close(testing.io);
         part.* = .{
             .config = try dir.readFileAlloc(testing.io, "config.json", arena, .unlimited),
@@ -51,7 +51,7 @@ test "load and fromBytes give the same model" {
     defer kw.deinit(gpa);
     var wave: [24000]f32 = undefined;
     noise(&wave, 1, 0.3);
-    var scratch = std.heap.ArenaAllocator.init(gpa);
+    var scratch: std.heap.ArenaAllocator = .init(gpa);
     defer scratch.deinit();
     const a = try model.detect(scratch.allocator(), &wave, kw, 0.01);
     const b = try copy.detect(scratch.allocator(), &wave, kw, 0.01);
@@ -88,7 +88,7 @@ test "detect validates its input" {
     defer model.deinit();
     const kw = try model.keyword(gpa, "hey computer");
     defer kw.deinit(gpa);
-    var scratch = std.heap.ArenaAllocator.init(gpa);
+    var scratch: std.heap.ArenaAllocator = .init(gpa);
     defer scratch.deinit();
     const s = scratch.allocator();
 

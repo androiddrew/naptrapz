@@ -109,7 +109,7 @@ pub const Stream = struct {
             .allocator = allocator,
             .ring = ring,
             .window = window,
-            .scratch = std.heap.ArenaAllocator.init(allocator),
+            .scratch = .init(allocator),
             .next_end = config.window_samples,
         };
     }

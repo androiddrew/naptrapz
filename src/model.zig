@@ -187,7 +187,7 @@ pub const Model = struct {
     }
 
     fn fromSources(gpa: std.mem.Allocator, sources: [3]ArtifactBytes, labels: [3][]const u8) !Model {
-        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        var arena_state: std.heap.ArenaAllocator = .init(gpa);
         errdefer arena_state.deinit();
         const arena = arena_state.allocator();
         var artifacts: [3]Artifact = undefined;

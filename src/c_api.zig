@@ -151,7 +151,7 @@ export fn naptrap_last_error() [*:0]const u8 {
 fn load(model_dir: [*:0]const u8, google_dir: [*:0]const u8, g2p_dir: [*:0]const u8) !*Engine {
     const engine = try allocator.create(Engine);
     errdefer allocator.destroy(engine);
-    engine.* = .{ .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
+    engine.* = .{ .scratch = .init(allocator), .model = undefined };
     // Loading only reads files, so it needs neither threads nor an allocator.
     var io: std.Io.Threaded = .init_single_threaded;
     engine.model = try naptrap.Model.load(io.io(), allocator, std.mem.span(model_dir), std.mem.span(google_dir), std.mem.span(g2p_dir));
@@ -161,7 +161,7 @@ fn load(model_dir: [*:0]const u8, google_dir: [*:0]const u8, g2p_dir: [*:0]const
 fn loadEmbedded() !*Engine {
     const engine = try allocator.create(Engine);
     errdefer allocator.destroy(engine);
-    engine.* = .{ .scratch = std.heap.ArenaAllocator.init(allocator), .model = undefined };
+    engine.* = .{ .scratch = .init(allocator), .model = undefined };
     engine.model = try bundled.load(allocator);
     return engine;
 }
@@ -221,11 +221,11 @@ const KeywordCreateError = naptrap.text.EncodeError || naptrap.model.KeywordErro
 fn createKeyword(engine: *Engine, text: []const u8) KeywordCreateError!*Keyword {
     const keyword = try allocator.create(Keyword);
     errdefer allocator.destroy(keyword);
-    keyword.* = .{ .engine = engine, .arena = std.heap.ArenaAllocator.init(allocator), .value = undefined, .text = undefined };
+    keyword.* = .{ .engine = engine, .arena = .init(allocator), .value = undefined, .text = undefined };
     errdefer keyword.arena.deinit();
     keyword.value = try engine.model.keyword(keyword.arena.allocator(), text);
     try naptrap.model.validateKeyword(keyword.value);
-    keyword.text = try keyword.arena.allocator().dupeZ(u8, keyword.value.text);
+    keyword.text = try keyword.arena.allocator().dupeSentinel(u8, keyword.value.text, 0);
     engine.references += 1;
     return keyword;
 }

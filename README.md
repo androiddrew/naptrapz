@@ -85,11 +85,10 @@ may change in any release. `zig build docs` installs the API documentation to
 Load diagnostics are logged through `std.log` under the `.naptrap` and
 `.safetensors` scopes; filter them with `std_options.log_scope_levels`.
 
-To embed models in a Zig program, pass `.@"embed-models" = path` to
-`b.dependency` and import the `naptrap_bundled` module (see
+To embed models in a Zig program, pass a `LazyPath` such as
+`.@"embed-models" = b.path("models")` to `b.dependency` and import the
+`naptrap_bundled` module (see
 [Self-contained embedded-model builds](#self-contained-embedded-model-builds)).
-A relative path is resolved against the naptrap package's own directory, so
-pass an absolute path, for example from `b.path("models").getPath(b)`.
 
 ## Streaming listener
 
@@ -199,8 +198,8 @@ codes are in `include/naptrap.h`; `tests/abi_smoke.c` exercises them. Python
 
 Supply **`-Dembed-models=DIR`** to embed all three `config.json` and
 `model.safetensors` pairs. The directory must contain `phonmatchnet/`, `google/`
-and `g2p/`. Absolute paths work; relative paths are resolved from the source
-directory containing `build.zig`.
+and `g2p/`. On the command line, a relative path is resolved from the current
+directory, like `-Dtest-models`.
 
 ```sh
 zig build -Doptimize=ReleaseFast -Dembed-models=models --prefix embedded

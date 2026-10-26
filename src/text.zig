@@ -191,7 +191,7 @@ pub const G2p = struct {
     /// `gpa`. Encoding stops with error.FeatureLengthOutOfRange as soon as it
     /// exceeds `max_rows`.
     pub fn encode(self: G2p, gpa: std.mem.Allocator, keyword: []const u8) EncodeError!Features {
-        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        var arena_state: std.heap.ArenaAllocator = .init(gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
@@ -248,7 +248,7 @@ pub const G2p = struct {
 const testing = std.testing;
 
 test "normalize matches the Python policy" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

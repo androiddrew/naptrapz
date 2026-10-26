@@ -13,12 +13,11 @@ pub fn build(b: *std.Build) void {
     });
 
     var bundle_source = b.path("src/unbundled.zig");
-    if (b.option([]const u8, "embed-models", "Embed phonmatchnet/, google/, g2p/ from this directory (relative to source root or absolute)")) |root| {
+    if (b.option(std.Build.LazyPath, "embed-models", "Embed phonmatchnet/, google/ and g2p/ from this directory")) |root| {
         const files = b.addWriteFiles();
         inline for (.{ "phonmatchnet", "google", "g2p" }) |part| {
             inline for (.{ "config.json", "model.safetensors" }) |name| {
-                const path = b.pathResolve(&.{ b.build_root.path orelse ".", root, part, name });
-                _ = files.addCopyFile(.{ .cwd_relative = path }, part ++ "/" ++ name);
+                _ = files.addCopyFile(root.path(b, part ++ "/" ++ name), part ++ "/" ++ name);
             }
         }
         // All generated sources/assets live in the build cache, not src/.
@@ -117,10 +116,7 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&exe.step);
     check_step.dependOn(&parity.step);
     check_step.dependOn(&static.step);
-    const models_dir: ?[]const u8 = if (b.option([]const u8, "test-models", "Directory with phonmatchnet/, google/ and g2p/ for end-to-end tests")) |dir|
-        b.pathResolve(&.{ b.build_root.path orelse ".", dir })
-    else
-        null;
+    const models_dir = b.option(std.Build.LazyPath, "test-models", "Directory with phonmatchnet/, google/ and g2p/ for end-to-end tests");
 
     const unit_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
@@ -128,7 +124,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }) });
     const test_options = b.addOptions();
-    test_options.addOption([]const u8, "models_dir", models_dir orelse "");
+    if (models_dir) |dir| test_options.addOptionPath("models_dir", dir) else test_options.addOption([]const u8, "models_dir", "");
     const model_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/model_test.zig"),
         .target = target,
@@ -143,7 +139,7 @@ pub fn build(b: *std.Build) void {
     abi_smoke.root_module.addIncludePath(b.path("include"));
     abi_smoke.root_module.linkLibrary(static);
     const run_abi_smoke = b.addRunArtifact(abi_smoke);
-    if (models_dir) |dir| run_abi_smoke.addArg(dir);
+    if (models_dir) |dir| run_abi_smoke.addDirectoryArg(dir);
     run_abi_smoke.expectExitCode(0);
 
     const docs = b.addInstallDirectory(.{

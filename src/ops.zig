@@ -331,7 +331,7 @@ test "gru with zero weights halves the state" {
 }
 
 test "conv2d and maxPool2d shapes" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var data = [_]f32{1} ** (4 * 6);
