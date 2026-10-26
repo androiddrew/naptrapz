@@ -16,6 +16,7 @@
 
 const std = @import("std");
 
+/// Dot product of two equal-length vectors.
 pub fn dot(a: []const f32, b: []const f32) f32 {
     std.debug.assert(a.len == b.len);
     const V = @Vector(8, f32);
@@ -43,20 +44,24 @@ pub fn linear(out: []f32, x: []const f32, rows: usize, w: []const f32, b: ?[]con
     }
 }
 
+/// 1 / (1 + e^-x)
 pub fn sigmoid(x: f32) f32 {
     return 1.0 / (1.0 + @exp(-x));
 }
 
+/// In-place max(x, 0).
 pub fn relu(xs: []f32) void {
     for (xs) |*x| x.* = @max(x.*, 0);
 }
 
+/// In-place leaky ReLU: negative values are multiplied by `slope`.
 pub fn leakyRelu(xs: []f32, slope: f32) void {
     for (xs) |*x| {
         if (x.* < 0) x.* *= slope;
     }
 }
 
+/// In-place, numerically stable softmax.
 pub fn softmax(xs: []f32) void {
     var max: f32 = -std.math.inf(f32);
     for (xs) |x| max = @max(max, x);
@@ -92,6 +97,7 @@ pub const Affine = struct {
     scale: []f32,
     shift: []f32,
 
+    /// Fold BatchNorm parameters (all one length per channel) into scale and shift.
     pub fn fromBatchNorm(alloc: std.mem.Allocator, weight: []const f32, bias: []const f32, mean: []const f32, variance: []const f32, eps: f32) !Affine {
         if (bias.len != weight.len or mean.len != weight.len or variance.len != weight.len) return error.ShapeMismatch;
         const scale = try alloc.alloc(f32, weight.len);
@@ -138,6 +144,7 @@ pub const Gru = struct {
     }
 };
 
+/// Output length of `conv1d`. Requires len + 2 * pad >= k.
 pub fn conv1dLen(len: usize, k: usize, stride: usize, pad: usize) usize {
     return (len + 2 * pad - k) / stride + 1;
 }
@@ -161,6 +168,7 @@ pub fn conv1d(out: []f32, x: []const f32, c_in: usize, len: usize, w: []const f3
     }
 }
 
+/// Output length of `convTranspose1d`. Requires len >= 1.
 pub fn convTranspose1dLen(len: usize, k: usize, stride: usize) usize {
     return (len - 1) * stride + k;
 }
@@ -187,12 +195,15 @@ pub const Map = struct {
     h: usize,
     w: usize,
 
+    /// The same map as a read-only view.
     pub fn readOnly(self: Map) ConstMap {
         return .{ .data = self.data, .c = self.c, .h = self.h, .w = self.w };
     }
 };
 
+/// A read-only [c][h][w] feature map.
 pub const ConstMap = struct { data: []const f32, c: usize, h: usize, w: usize };
+/// Element type of the `conv2dInto` patch workspace.
 pub const ConvVector = @Vector(8, f32);
 
 /// Stride-1 Conv2d without bias, zero padding (ph, pw).

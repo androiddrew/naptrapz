@@ -12,13 +12,21 @@
 
 const std = @import("std");
 
+/// Input sample rate in Hz.
 pub const sample_rate = 16000;
+/// FFT size in samples.
 pub const n_fft = 512;
+/// Real-input FFT bins.
 pub const bins = n_fft / 2 + 1;
+/// Samples between frames.
 pub const hop_length = 160;
+/// Analysis window length in samples.
 pub const win_length = 400;
+/// Mel bins of the keyword frontend.
 pub const keyword_mels = 40;
+/// Mel bins of the Google frontend.
 pub const google_mels = 32;
+/// Zeros the Google frontend prepends to the clip.
 pub const google_left_pad = 11120;
 
 /// Radix-2 twiddle factors e^(-2*pi*i*k/n_fft) for k < n_fft / 2.
@@ -103,6 +111,7 @@ pub fn keywordMel(alloc: std.mem.Allocator, wave: []const f32, window: []const f
     return out;
 }
 
+/// Frames `googleLogMel` produces for a clip of `wave_len` samples.
 pub fn googleFrames(wave_len: usize) usize {
     return (wave_len + google_left_pad - win_length) / hop_length + 1;
 }

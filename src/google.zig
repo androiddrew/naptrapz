@@ -15,8 +15,12 @@ const ops = @import("ops.zig");
 const st = @import("safetensors.zig");
 const features = @import("features.zig");
 
+/// Width of one Google embedding row.
 pub const embedding_size = 96;
+/// Input samples per embedding row.
 pub const samples_per_embedding = 1280;
+/// SHA-256 of Google's original speech_embedding/1 archive, which a Google
+/// artifact's config must name as its source.
 pub const source_archive_sha256 = "0f626c42009c1eb916401b7b2800229a211e43100115bc591b9afbf1b60da27f";
 const bn_eps = 0.001;
 
@@ -31,6 +35,8 @@ const Layer = struct {
     pool_w: usize,
 };
 
+/// The Google speech_embedding encoder. Weight slices are borrowed from the
+/// safetensors file it was initialized from.
 pub const Google = struct {
     window: []const f32,
     mel: []const f32,
@@ -39,6 +45,7 @@ pub const Google = struct {
     norms: [19]ops.Affine,
     output: []const f32,
 
+    /// Check every tensor shape in `file` and fold its BatchNorms into `arena`.
     pub fn init(arena: std.mem.Allocator, file: st.File) !Google {
         var self: Google = .{
             .window = try file.expect("window", &.{features.win_length}),
@@ -107,10 +114,12 @@ pub const Google = struct {
         }
     }
 
+    /// The 32-bin log-mel input of the conv stack: [googleFrames(len)][32].
     pub fn logMel(self: Google, arena: std.mem.Allocator, wave: []const f32) ![]f32 {
         return features.googleLogMel(arena, wave, self.window, self.mel);
     }
 
+    /// Embedding rows, [rows][96].
     pub const Embeddings = struct {
         data: []const f32, // [rows][96]
         rows: usize,
@@ -171,6 +180,8 @@ pub const Google = struct {
         return height - 2;
     }
 
+    /// Embed a 16 kHz clip: [len / 1280][96]. Buffers come from `arena`
+    /// and are not freed individually.
     pub fn embed(self: Google, arena: std.mem.Allocator, wave: []const f32) !Embeddings {
         const log_mel = try self.logMel(arena, wave);
         const result = try self.encodeLogMel(arena, log_mel, features.googleFrames(wave.len));

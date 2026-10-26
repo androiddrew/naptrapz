@@ -21,6 +21,8 @@ const bn_eps = 1e-5;
 const leaky_slope = 0.01;
 const max_text_rows = @import("text.zig").max_rows;
 
+/// The PhonMatchNet matcher. Weight slices are borrowed from the safetensors
+/// file it was initialized from.
 pub const Network = struct {
     kw_window: []const f32,
     kw_mel: []const f32,
@@ -42,6 +44,7 @@ pub const Network = struct {
     head_w: []const f32,
     head_b: []const f32,
 
+    /// Check every tensor shape in `file` and fold its BatchNorms into `arena`.
     pub fn init(arena: std.mem.Allocator, file: st.File) !Network {
         return .{
             .kw_window = try file.expect("audio.frontend.window", &.{features.win_length}),
@@ -84,6 +87,7 @@ pub const Network = struct {
         );
     }
 
+    /// The matcher's 40-bin keyword log-mel: [ceil(len / 160)][40].
     pub fn keywordMel(self: Network, arena: std.mem.Allocator, wave: []const f32) ![]f32 {
         return features.keywordMel(arena, wave, self.kw_window, self.kw_mel);
     }

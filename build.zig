@@ -146,6 +146,13 @@ pub fn build(b: *std.Build) void {
     if (models_dir) |dir| run_abi_smoke.addArg(dir);
     run_abi_smoke.expectExitCode(0);
 
+    const docs = b.addInstallDirectory(.{
+        .source_dir = unit_tests.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    b.step("docs", "Generate API documentation into <prefix>/docs").dependOn(&docs.step);
+
     for ([_]*std.Build.Step.Compile{ unit_tests, model_tests, abi_smoke }) |artifact| {
         check_step.dependOn(&artifact.step);
     }

@@ -9,6 +9,7 @@ const std = @import("std");
 const ops = @import("ops.zig");
 const st = @import("safetensors.zig");
 const unicode_data = @import("unicode_data.zig");
+/// Unicode version of the generated normalization table.
 pub const unicode_version = unicode_data.unicode_version;
 
 /// Index 0 <pad>, 1 <unk>, 2 </s>, then a..z.
@@ -125,6 +126,8 @@ pub fn normalize(arena: std.mem.Allocator, keyword: []const u8) NormalizeError![
 // G2P decoder
 // ---------------------------------------------------------------------------
 
+/// The g2p_en grapheme encoder and greedy phoneme decoder. Weight slices are
+/// borrowed from the safetensors file it was initialized from.
 pub const G2p = struct {
     size: usize,
     phonemes: usize,

@@ -13,6 +13,7 @@ const std = @import("std");
 // warn, not err: the test runner fails any test that logs at error level.
 const log = std.log.scoped(.safetensors);
 
+/// A float tensor decoded to f32, row-major.
 pub const Tensor = struct {
     shape: []const usize,
     data: []const f32,
@@ -23,11 +24,14 @@ const Entry = struct {
     tensor: Tensor,
 };
 
+/// The float tensors of one safetensors file.
 pub const File = struct {
     entries: []const Entry,
     /// The optional "__metadata__" object (string -> string), or .null.
     metadata: std.json.Value,
 
+    /// Parse `bytes`, decoding every float tensor into `arena`. Returns
+    /// error.InvalidSafetensors for malformed headers or inconsistent sizes.
     pub fn parse(arena: std.mem.Allocator, bytes: []const u8) !File {
         if (bytes.len < 8) return error.InvalidSafetensors;
         const header_len = std.mem.readInt(u64, bytes[0..8], .little);
@@ -73,6 +77,7 @@ pub const File = struct {
         return .{ .entries = entries.items, .metadata = metadata };
     }
 
+    /// The tensor called `name`, or error.MissingTensor.
     pub fn get(self: File, name: []const u8) !Tensor {
         for (self.entries) |entry| {
             if (std.mem.eql(u8, entry.name, name)) return entry.tensor;
@@ -91,6 +96,7 @@ pub const File = struct {
         return tensor.data;
     }
 
+    /// A string value from the "__metadata__" object, if present.
     pub fn metadataString(self: File, key: []const u8) ?[]const u8 {
         if (self.metadata != .object) return null;
         const value = self.metadata.object.get(key) orelse return null;

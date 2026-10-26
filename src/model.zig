@@ -16,14 +16,17 @@ const network_mod = @import("phonmatchnet.zig");
 
 const log = std.log.scoped(.naptrap);
 
+/// Weights file name inside each artifact directory.
 pub const weights_file = "model.safetensors";
 const max_weights_bytes = 256 << 20;
 
+/// One calibrated operating point: score threshold `value` for target per-clip false-accept rate `far`.
 pub const Threshold = struct {
     far: f64,
     value: f64,
 };
 
+/// Precomputed keyword text features; see `Model.keyword`.
 pub const Keyword = text_mod.G2p.Features;
 
 /// Errors for keyword features that the matcher cannot consume.
@@ -58,11 +61,17 @@ pub fn validateKeyword(keyword: Keyword) KeywordError!void {
     for (keyword.data) |value| if (!std.math.isFinite(value)) return error.InvalidFeatures;
 }
 
+/// The result of scoring one clip.
 pub const Prediction = struct {
+    /// sigmoid(logit), in [0, 1].
     score: f32,
+    /// The matcher's raw keyword logit.
     logit: f32,
+    /// Score threshold of the selected operating point.
     threshold: f64,
+    /// Whether score >= threshold.
     accepted: bool,
+    /// The operating point that was requested.
     target_far: f64,
 };
 
