@@ -102,8 +102,10 @@ false-alarm rates need evaluation separately from the per-clip FAR calibration.
 
 ## Embedding through the C ABI
 
-The normal build also installs `lib/libnaptrap.so`, `lib/libnaptrap.a` (platform
-equivalents on other targets), and `include/naptrap.h`. ABI version **1** uses
+The normal build also installs `lib/libnaptrap.so` and `lib/libnaptrap.a` (on macOS
+`libnaptrap.dylib`; on Windows `bin/naptrap.dll` with import library
+`lib/naptrap.lib` and static library `lib/naptrap_static.lib`; on wasm only the
+static library), plus `include/naptrap.h`. ABI version **1** uses
 opaque handles, fixed-width result fields, explicit status codes and thread-local
 error messages. The library never writes to stdout or stderr; diagnostics that
 the Zig code logs are appended to `naptrap_last_error()`. The static archive is position-independent and includes Zig's

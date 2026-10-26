@@ -63,12 +63,17 @@ pub fn build(b: *std.Build) void {
         .pic = true,
         .imports = &.{ .{ .name = "naptrap", .module = lib }, .{ .name = "naptrap_bundled", .module = bundled } },
     });
-    const shared = b.addLibrary(.{ .name = "naptrap", .linkage = .dynamic, .root_module = c_module });
-    const static = b.addLibrary(.{ .name = "naptrap", .linkage = .static, .root_module = c_module });
+    // On Windows the DLL's import library is naptrap.lib, so the static
+    // archive needs a different name. wasm has no stable shared libraries.
+    const static_name = if (target.result.os.tag == .windows) "naptrap_static" else "naptrap";
+    const static = b.addLibrary(.{ .name = static_name, .linkage = .static, .root_module = c_module });
     static.bundle_compiler_rt = true;
-    shared.installHeader(b.path("include/naptrap.h"), "naptrap.h");
-    b.installArtifact(shared);
+    static.installHeader(b.path("include/naptrap.h"), "naptrap.h");
     b.installArtifact(static);
+    if (!target.result.cpu.arch.isWasm()) {
+        const shared = b.addLibrary(.{ .name = "naptrap", .linkage = .dynamic, .root_module = c_module });
+        b.installArtifact(shared);
+    }
 
     const run = b.addRunArtifact(exe);
     if (b.args) |args| run.addArgs(args);
